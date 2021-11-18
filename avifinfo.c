@@ -290,7 +290,7 @@ static AvifInfoInternalStatus ParseIpcoForFeaturesInProperty(
       const int high_bitdepth = (fields & 0x40) != 0;
       const int twelve_bit = (fields & 0x20) != 0;
       const int monochrome = (fields & 0x10) != 0;
-      AVIFINFO_CHECK(twelve_bit || !high_bitdepth, kInvalid);
+      AVIFINFO_CHECK(high_bitdepth || !twelve_bit, kInvalid);
       features->num_channels = monochrome ? 1 : 3;
       features->bit_depth = high_bitdepth ? twelve_bit ? 12 : 10 : 8;
       return kFound;
