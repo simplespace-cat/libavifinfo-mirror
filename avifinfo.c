@@ -100,18 +100,32 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
     const uint8_t* bytes, uint32_t num_bytes, uint32_t max_num_bytes,
     uint32_t position, uint32_t* num_parsed_boxes, AvifInfoInternalBox* box) {
   // See ISO/IEC 14496-12:2012(E) 4.2
-  AVIFINFO_CHECK(position <= kAvifInfoInternalMaxSize - 8, kAborted);
-  AVIFINFO_CHECK(position + 8 <= max_num_bytes, kInvalid);  // box size+type
-  AVIFINFO_CHECK(position + 4 <= num_bytes, kTruncated);    // 32b size
+  uint32_t box_header_size = 8;  // box 32b size + 32b type (at least)
+  AVIFINFO_CHECK(position <= kAvifInfoInternalMaxSize - box_header_size,
+                 kAborted);
+  AVIFINFO_CHECK(position + box_header_size <= max_num_bytes, kInvalid);
+  AVIFINFO_CHECK(position + box_header_size <= num_bytes, kTruncated);
   box->size = AvifInfoInternalReadBigEndian(bytes + position, sizeof(uint32_t));
-  // Note: 'box->size==1' means 64b size should be read.
-  //       'box->size==0' means this box extends to all remaining bytes.
-  //       These two use cases are not handled here for simplicity.
-  AVIFINFO_CHECK(box->size >= 2, kAborted);
-  AVIFINFO_CHECK(box->size >= 8, kInvalid);  // box 32b size + 32b type
+  // 'box->size==1' means 64-bit size should be read after the box type.
+  // 'box->size==0' means this box extends to all remaining bytes.
+  if (box->size == 1) {
+    box_header_size += 8;
+    AVIFINFO_CHECK(position + box_header_size <= max_num_bytes, kInvalid);
+    AVIFINFO_CHECK(position + box_header_size <= num_bytes, kTruncated);
+    // Stop the parsing if any box has a size greater than 4GB.
+    AVIFINFO_CHECK(AvifInfoInternalReadBigEndian(bytes + position + 8,
+                                                 sizeof(uint32_t)) == 0,
+                   kAborted);
+    // Read the 32 least-significant bits.
+    box->size =
+        AvifInfoInternalReadBigEndian(bytes + position + 12, sizeof(uint32_t));
+  } else if (box->size == 0) {
+    box->size = max_num_bytes - position;
+  }
+  AVIFINFO_CHECK(box->size >= box_header_size, kInvalid);
   AVIFINFO_CHECK(box->size <= kAvifInfoInternalMaxSize - position, kAborted);
   AVIFINFO_CHECK(position + box->size <= max_num_bytes, kInvalid);
-  AVIFINFO_CHECK(position + 8 <= num_bytes, kTruncated);
+  AVIFINFO_CHECK(position + box_header_size <= num_bytes, kTruncated);
   box->type = bytes + position + 4;
 
   const int has_fullbox_header =
@@ -119,7 +133,7 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
       !memcmp(box->type, "ipma", 4) || !memcmp(box->type, "ispe", 4) ||
       !memcmp(box->type, "pixi", 4) || !memcmp(box->type, "iref", 4) ||
       !memcmp(box->type, "auxC", 4);
-  const uint32_t box_header_size = (has_fullbox_header ? 12 : 8);
+  if (has_fullbox_header) box_header_size += 4;
   AVIFINFO_CHECK(box->size >= box_header_size, kInvalid);
   box->content_position = position + box_header_size;
   AVIFINFO_CHECK(box->content_position <= num_bytes, kTruncated);
@@ -153,7 +167,7 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
 
 // Returns kFound if 'min_size' bytes can be read from the 'box.content' now.
 // 'num_bytes' is the number of available bytes of the parent of the 'box'.
-static AvifInfoInternalStatus AccessContent(AvifInfoInternalBox* box,
+static AvifInfoInternalStatus AccessContent(const AvifInfoInternalBox* box,
                                             uint32_t num_bytes,
                                             uint32_t min_size) {
   AVIFINFO_CHECK(box->content_size >= min_size, kInvalid);
