@@ -44,6 +44,22 @@ TEST(AvifInfoGetTest, WithoutFileSize) {
   EXPECT_EQ(features.num_channels, 3u);
 }
 
+TEST(AvifInfoGetTest, NoPixi10b) {
+  // Same as above but "meta" box size is stored as 64 bits, "av1C" has
+  // 'high_bitdepth' set to true, "pixi" was renamed to "pixy" and "mdat" size
+  // is 0 (extends to the end of the file).
+  const Data input =
+      LoadFile("avifinfo_test_1x1_10b_nopixi_metasize64b_mdatsize0.avif");
+  ASSERT_FALSE(input.empty());
+
+  AvifInfoFeatures features;
+  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
+  EXPECT_EQ(features.width, 1u);
+  EXPECT_EQ(features.height, 1u);
+  EXPECT_EQ(features.bit_depth, 10u);
+  EXPECT_EQ(features.num_channels, 3u);
+}
+
 TEST(AvifInfoGetTest, WithFileSize) {
   const Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
