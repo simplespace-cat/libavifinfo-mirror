@@ -198,6 +198,7 @@ static AvifInfoInternalStatus ParseFileForBrand(const uint8_t* bytes,
             !memcmp(box.content + i, "avis", 4)) {
           return kFound;
         }
+        AVIFINFO_CHECK(i <= 32 * 4, kAborted);  // Be reasonable.
       }
       AVIFINFO_RETURN(kInvalid);  // Only one "ftyp" allowed per file.
     }
@@ -293,6 +294,7 @@ static AvifInfoInternalStatus ParseIpcoForFeaturesInProperty(
             AvifInfoInternalReadBigEndian(box.content + 1 + i, 1);
         // Bit depth should be the same for all channels.
         AVIFINFO_CHECK(bit_depth == features->bit_depth, kInvalid);
+        AVIFINFO_CHECK(i <= 32, kAborted);  // Be reasonable.
       }
       return kFound;
     } else if (features->num_channels == 0 && !memcmp(box.type, "av1C", 4)) {
@@ -396,7 +398,9 @@ static AvifInfoInternalStatus ParseIprpForFeatures(const uint8_t* bytes,
               return kFound;  // Found everything. Otherwise carry on.
             }
           }
+          AVIFINFO_CHECK(property <= 32, kAborted);  // Be reasonable.
         }
+        AVIFINFO_CHECK(entry <= 32, kAborted);  // Be reasonable.
       }
 
       // According to ISO/IEC 14496-12:2012(E) 8.11.1.1, there is at most one
@@ -499,6 +503,7 @@ static AvifInfoInternalStatus ParseIrefForFeaturesInTiles(
               meta_bytes, meta_num_bytes, meta_max_num_bytes, to_item_id,
               num_parsed_boxes, features));
           // Trying the first tile should be enough. Check others just in case.
+          AVIFINFO_CHECK(i <= 32, kAborted);  // Be reasonable.
         }
       }
     }
