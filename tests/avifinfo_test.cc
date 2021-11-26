@@ -192,6 +192,17 @@ TEST(AvifInfoGetTest, TooManyBoxes) {
             kAvifInfoTooComplex);
 }
 
+TEST(AvifInfoReadTest, Null) {
+  AvifInfoFeatures features;
+  EXPECT_EQ(AvifInfoRead(/*stream=*/nullptr, /*read=*/nullptr, /*skip=*/nullptr,
+                         &features),
+            kAvifInfoNotEnoughData);
+  EXPECT_EQ(features.width, 0u);
+  EXPECT_EQ(features.height, 0u);
+  EXPECT_EQ(features.bit_depth, 0u);
+  EXPECT_EQ(features.num_channels, 0u);
+}
+
 //------------------------------------------------------------------------------
 
 }  // namespace

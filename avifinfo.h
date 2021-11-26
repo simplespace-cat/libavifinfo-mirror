@@ -41,6 +41,10 @@ typedef struct {
                            //   (1 monochrome or 3 colors) + (0 or 1 alpha)
 } AvifInfoFeatures;
 
+//------------------------------------------------------------------------------
+// Fixed-size input API
+// Use this API if a raw byte array of fixed size is available as input.
+
 // Parses the AVIF 'data' and extracts its 'features'.
 // 'data' can be partial but must point to the beginning of the AVIF file.
 // The 'features' can be parsed in the first 450 bytes of most AVIF files.
@@ -55,11 +59,38 @@ AvifInfoStatus AvifInfoGetWithSize(const uint8_t* data, size_t data_size,
                                    size_t file_size);
 
 //------------------------------------------------------------------------------
+// Streamed input API
+// Use this API if the input bytes must be fetched and/or if the AVIF payload
+// size is unknown. Implement the two function signatures below and pass them to
+// AvifInfoRead*() with a 'stream', which can be anything (file, struct etc.).
+
+// Reads 'num_bytes' from the 'stream'.
+// The position in the 'stream' must be advanced by 'num_bytes'.
+// Returns a pointer to the 'num_bytes' or null if it cannot be fulfilled.
+// The returned data must remain valid until the next read.
+typedef const uint8_t* (*read_stream_t)(void* stream, size_t num_bytes);
+// Advances the position in the 'stream' by 'num_bytes'.
+typedef void (*skip_stream_t)(void* stream, size_t num_bytes);
+
+// Maximum number of bytes requested per read. There is no limit per skip.
+#define AVIFINFO_MAX_NUM_READ_BYTES 64
+
+// Same as AvifInfoGet*() but takes a 'stream' as input. AvifInfoRead*() does
+// not access the 'stream' directly but passes it as is to 'read' and 'skip'.
+// 'read' cannot be null. If 'skip' is null, 'read' is called instead.
+AvifInfoStatus AvifInfoRead(void* stream, read_stream_t read,
+                            skip_stream_t skip, AvifInfoFeatures* features);
+AvifInfoStatus AvifInfoReadWithSize(void* stream, read_stream_t read,
+                                    skip_stream_t skip,
+                                    AvifInfoFeatures* features,
+                                    size_t file_size);
+
+//------------------------------------------------------------------------------
 
 // If needed, avifinfo.h and avifinfo.c can be merged into a single file:
 //   1. Replace this block comment by the content of avifinfo.c
 //   2. Discard #include "./avifinfo.h" and move other includes to the top
-//   3. Mark AvifInfoGet*() declarations and definitions as static
+//   3. Mark AvifInfo*() declarations and definitions as static
 // This procedure can be useful when only one translation unit uses avifinfo,
 // whether it includes the merged .h or the merged code is inserted into a file.
 

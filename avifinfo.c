@@ -26,7 +26,15 @@ typedef enum {
 
 // uint32_t is used everywhere in this file. It is unlikely to be insufficient
 // to parse AVIF headers. Clamp any input to 2^32-1 for simplicity.
-static const uint32_t kAvifInfoInternalMaxSize = UINT32_MAX;
+#define AVIFINFO_MAX_SIZE UINT32_MAX
+// AvifInfoInternalFeatures uses uint8_t to store values and the number of
+// values is clamped to 32 to limit the stack size.
+#define AVIFINFO_MAX_VALUE UINT8_MAX
+#define AVIFINFO_UNDEFINED 0
+// Maximum number of stored associations. Past that, they are skipped.
+#define AVIFINFO_MAX_TILES 16
+#define AVIFINFO_MAX_PROPS 32
+#define AVIFINFO_MAX_FEATURES 8
 
 // Reads an unsigned integer from 'input' with most significant bits first.
 // 'input' must be at least 'num_bytes'-long.
@@ -79,54 +87,192 @@ static void AvifInfoInternalLogError(const char* file, int line,
   AVIFINFO_CHECK_STATUS_IS((check_status), kNotFound)
 
 //------------------------------------------------------------------------------
+// Streamed input struct and helper functions.
+
+typedef struct {
+  void* stream;             // User-defined data.
+  read_stream_t read;       // Used to fetch more bytes from the 'stream'.
+  skip_stream_t skip;       // Used to advance the position in the 'stream'.
+                            // Fallback to 'read' if 'skip' is null.
+  uint32_t num_read_bytes;  // Total number of read bytes.
+} AvifInfoInternalStream;
+
+// Reads 'num_bytes' from the 'stream'. They are available at '*data'.
+// 'num_bytes' must be greater than zero.
+static AvifInfoInternalStatus AvifInfoInternalRead(
+    AvifInfoInternalStream* stream, uint32_t num_bytes, const uint8_t** data) {
+  *data = stream->read(stream->stream, num_bytes);
+  AVIFINFO_CHECK(*data != NULL, kTruncated);
+  stream->num_read_bytes += num_bytes;
+  return kFound;
+}
+
+// Skips 'num_bytes' from the 'stream'. 'num_bytes' can be zero.
+static AvifInfoInternalStatus AvifInfoInternalSkip(
+    AvifInfoInternalStream* stream, uint32_t num_bytes) {
+  // Avoid a call to the user-defined function for nothing.
+  if (num_bytes > 0) {
+    if (stream->skip == NULL) {
+      const uint8_t* unused;
+      while (num_bytes > AVIFINFO_MAX_NUM_READ_BYTES) {
+        AVIFINFO_CHECK_FOUND(
+            AvifInfoInternalRead(stream, AVIFINFO_MAX_NUM_READ_BYTES, &unused));
+        num_bytes -= AVIFINFO_MAX_NUM_READ_BYTES;
+      }
+      return AvifInfoInternalRead(stream, num_bytes, &unused);
+    }
+    stream->skip(stream->stream, num_bytes);
+    stream->num_read_bytes += num_bytes;
+  }
+  return kFound;
+}
+
+//------------------------------------------------------------------------------
+// Features are parsed into temporary property associations.
+
+typedef struct {
+  uint8_t tile_item_id;
+  uint8_t parent_item_id;
+} AvifInfoInternalTile;  // Tile item id <-> parent item id associations.
+
+typedef struct {
+  uint8_t property_index;
+  uint8_t item_id;
+} AvifInfoInternalProp;  // Property index <-> item id associations.
+
+typedef struct {
+  uint8_t property_index;
+  uint32_t width, height;
+} AvifInfoInternalDimProp;  // Property <-> features associations.
+
+typedef struct {
+  uint8_t property_index;
+  uint8_t bit_depth, num_channels;
+} AvifInfoInternalChanProp;  // Property <-> features associations.
+
+typedef struct {
+  uint8_t has_primary_item;  // True if "pitm" was parsed.
+  uint8_t has_alpha;         // True if an alpha "auxC" was parsed.
+  uint8_t primary_item_id;
+  AvifInfoFeatures primary_item_features;  // Deduced from the data below.
+  uint8_t data_was_skipped;  // True if some loops/indices were skipped.
+
+  uint8_t num_tiles;
+  AvifInfoInternalTile tiles[AVIFINFO_MAX_TILES];
+  uint8_t num_props;
+  AvifInfoInternalProp props[AVIFINFO_MAX_PROPS];
+  uint8_t num_dim_props;
+  AvifInfoInternalDimProp dim_props[AVIFINFO_MAX_FEATURES];
+  uint8_t num_chan_props;
+  AvifInfoInternalChanProp chan_props[AVIFINFO_MAX_FEATURES];
+} AvifInfoInternalFeatures;
+
+// Generates the features of a given 'target_item_id' from internal features.
+static AvifInfoInternalStatus AvifInfoInternalGetItemFeatures(
+    AvifInfoInternalFeatures* f, uint32_t target_item_id, uint32_t tile_depth) {
+  for (uint32_t prop_item = 0; prop_item < f->num_props; ++prop_item) {
+    if (f->props[prop_item].item_id != target_item_id) continue;
+    const uint32_t property_index = f->props[prop_item].property_index;
+
+    // Retrieve the width and height of the primary item if not already done.
+    if (target_item_id == f->primary_item_id &&
+        (f->primary_item_features.width == AVIFINFO_UNDEFINED ||
+         f->primary_item_features.height == AVIFINFO_UNDEFINED)) {
+      for (uint32_t i = 0; i < f->num_dim_props; ++i) {
+        if (f->dim_props[i].property_index != property_index) continue;
+        f->primary_item_features.width = f->dim_props[i].width;
+        f->primary_item_features.height = f->dim_props[i].height;
+        if (f->primary_item_features.bit_depth != AVIFINFO_UNDEFINED &&
+            f->primary_item_features.num_channels != AVIFINFO_UNDEFINED) {
+          return kFound;
+        }
+        break;
+      }
+    }
+    // Retrieve the bit depth and number of channels of the target item if not
+    // already done.
+    if (f->primary_item_features.bit_depth == AVIFINFO_UNDEFINED ||
+        f->primary_item_features.num_channels == AVIFINFO_UNDEFINED) {
+      for (uint32_t i = 0; i < f->num_chan_props; ++i) {
+        if (f->chan_props[i].property_index != property_index) continue;
+        f->primary_item_features.bit_depth = f->chan_props[i].bit_depth;
+        f->primary_item_features.num_channels = f->chan_props[i].num_channels;
+        if (f->primary_item_features.width != AVIFINFO_UNDEFINED &&
+            f->primary_item_features.height != AVIFINFO_UNDEFINED) {
+          return kFound;
+        }
+        break;
+      }
+    }
+  }
+
+  // Check for the bit_depth and num_channels in a tile if not yet found.
+  for (uint32_t tile = 0; tile < f->num_tiles && tile_depth < 3; ++tile) {
+    if (f->tiles[tile].parent_item_id != target_item_id) continue;
+    AVIFINFO_CHECK_NOT_FOUND(AvifInfoInternalGetItemFeatures(
+        f, f->tiles[tile].tile_item_id, tile_depth + 1));
+  }
+  AVIFINFO_RETURN(kNotFound);
+}
+
+// Generates the 'f->primary_item_features' from the AvifInfoInternalFeatures.
+// Returns kNotFound if there is not enough information.
+static AvifInfoInternalStatus AvifInfoInternalGetPrimaryItemFeatures(
+    AvifInfoInternalFeatures* f) {
+  // Nothing to do without the primary item ID.
+  AVIFINFO_CHECK(f->has_primary_item, kNotFound);
+  // Early exit.
+  AVIFINFO_CHECK(f->num_dim_props > 0 && f->num_chan_props, kNotFound);
+  AVIFINFO_CHECK_FOUND(
+      AvifInfoInternalGetItemFeatures(f, f->primary_item_id, /*tile_depth=*/0));
+
+  // "auxC" is parsed before the "ipma" properties so it is known now, if any.
+  if (f->has_alpha) ++f->primary_item_features.num_channels;
+  return kFound;
+}
+
+//------------------------------------------------------------------------------
 // Box header parsing and various size checks.
 
 typedef struct {
-  uint32_t size;              // In bytes.
-  const uint8_t* type;        // Points to four characters.
-  uint32_t version;           // 0 or actual version if this is a full box.
-  uint32_t flags;             // 0 or actual value if this is a full box.
-  uint32_t content_size;      // 'size' minus the header size.
-  uint32_t content_position;  // Position in bytes of the 'content' of this box
-                              // relative to its container.
-  const uint8_t* content;     // Content bytes of this box (after its header).
+  uint32_t size;          // In bytes.
+  uint8_t type[4];        // Four characters.
+  uint32_t version;       // 0 or actual version if this is a full box.
+  uint32_t flags;         // 0 or actual value if this is a full box.
+  uint32_t content_size;  // 'size' minus the header size.
 } AvifInfoInternalBox;
 
-// Reads the header of a 'box' starting at 'bytes + position'.
-// 'num_bytes' is the number of available 'bytes'.
-// 'max_num_bytes' is the size of the container of the 'box' (either the file
-// itself or the content of the parent of the 'box').
+// Reads the header of a 'box' starting at the beginning of a 'stream'.
+// 'num_remaining_bytes' is the remaining size of the container of the 'box'
+// (either the file size itself or the content size of the parent of the 'box').
 static AvifInfoInternalStatus AvifInfoInternalParseBox(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t max_num_bytes,
-    uint32_t position, uint32_t* num_parsed_boxes, AvifInfoInternalBox* box) {
+    AvifInfoInternalStream* stream, uint32_t num_remaining_bytes,
+    uint32_t* num_parsed_boxes, AvifInfoInternalBox* box) {
+  const uint8_t* data;
   // See ISO/IEC 14496-12:2012(E) 4.2
   uint32_t box_header_size = 8;  // box 32b size + 32b type (at least)
-  AVIFINFO_CHECK(position <= kAvifInfoInternalMaxSize - box_header_size,
-                 kAborted);
-  AVIFINFO_CHECK(position + box_header_size <= max_num_bytes, kInvalid);
-  AVIFINFO_CHECK(position + box_header_size <= num_bytes, kTruncated);
-  box->size = AvifInfoInternalReadBigEndian(bytes + position, sizeof(uint32_t));
+  AVIFINFO_CHECK(box_header_size <= num_remaining_bytes, kInvalid);
+  AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 8, &data));
+  box->size = AvifInfoInternalReadBigEndian(data, sizeof(uint32_t));
+  memcpy(box->type, data + 4, 4);
   // 'box->size==1' means 64-bit size should be read after the box type.
   // 'box->size==0' means this box extends to all remaining bytes.
   if (box->size == 1) {
     box_header_size += 8;
-    AVIFINFO_CHECK(position + box_header_size <= max_num_bytes, kInvalid);
-    AVIFINFO_CHECK(position + box_header_size <= num_bytes, kTruncated);
+    AVIFINFO_CHECK(box_header_size <= num_remaining_bytes, kInvalid);
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 8, &data));
     // Stop the parsing if any box has a size greater than 4GB.
-    AVIFINFO_CHECK(AvifInfoInternalReadBigEndian(bytes + position + 8,
-                                                 sizeof(uint32_t)) == 0,
+    AVIFINFO_CHECK(AvifInfoInternalReadBigEndian(data, sizeof(uint32_t)) == 0,
                    kAborted);
     // Read the 32 least-significant bits.
-    box->size =
-        AvifInfoInternalReadBigEndian(bytes + position + 12, sizeof(uint32_t));
+    box->size = AvifInfoInternalReadBigEndian(data + 4, sizeof(uint32_t));
   } else if (box->size == 0) {
-    box->size = max_num_bytes - position;
+    box->size = num_remaining_bytes;
   }
   AVIFINFO_CHECK(box->size >= box_header_size, kInvalid);
-  AVIFINFO_CHECK(box->size <= kAvifInfoInternalMaxSize - position, kAborted);
-  AVIFINFO_CHECK(position + box->size <= max_num_bytes, kInvalid);
-  AVIFINFO_CHECK(position + box_header_size <= num_bytes, kTruncated);
-  box->type = bytes + position + 4;
+  AVIFINFO_CHECK(box->size <= AVIFINFO_MAX_SIZE - stream->num_read_bytes,
+                 kAborted);
+  AVIFINFO_CHECK(box->size <= num_remaining_bytes, kInvalid);
 
   const int has_fullbox_header =
       !memcmp(box->type, "meta", 4) || !memcmp(box->type, "pitm", 4) ||
@@ -135,10 +281,7 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
       !memcmp(box->type, "auxC", 4);
   if (has_fullbox_header) box_header_size += 4;
   AVIFINFO_CHECK(box->size >= box_header_size, kInvalid);
-  box->content_position = position + box_header_size;
-  AVIFINFO_CHECK(box->content_position <= num_bytes, kTruncated);
   box->content_size = box->size - box_header_size;
-  box->content = bytes + box->content_position;
   // Avoid timeouts. The maximum number of parsed boxes is arbitrary.
   ++*num_parsed_boxes;
   AVIFINFO_CHECK(*num_parsed_boxes < 4096, kAborted);
@@ -146,8 +289,9 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
   box->version = 0;
   box->flags = 0;
   if (has_fullbox_header) {
-    box->version = AvifInfoInternalReadBigEndian(bytes + position + 8, 1);
-    box->flags = AvifInfoInternalReadBigEndian(bytes + position + 9, 3);
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 4, &data));
+    box->version = AvifInfoInternalReadBigEndian(data, 1);
+    box->flags = AvifInfoInternalReadBigEndian(data + 1, 3);
     // See AV1 Image File Format (AVIF) 8.1
     // at https://aomediacodec.github.io/av1-avif/#avif-boxes (available when
     // https://github.com/AOMediaCodec/av1-avif/pull/170 is merged).
@@ -160,572 +304,448 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
     if (!memcmp(box->type, "iref", 4)) is_parsable = (box->version <= 1);
     if (!memcmp(box->type, "auxC", 4)) is_parsable = (box->version <= 0);
     // Instead of considering this file as invalid, skip unparsable boxes.
-    if (!is_parsable) box->type = (const uint8_t*)"\0skip";
+    if (!is_parsable) memcpy(box->type, "\0skp", 4);  // \0 so not a valid type
   }
   return kFound;
 }
 
-// Returns kFound if 'min_size' bytes can be read from the 'box.content' now.
-// 'num_bytes' is the number of available bytes of the parent of the 'box'.
-static AvifInfoInternalStatus AccessContent(const AvifInfoInternalBox* box,
-                                            uint32_t num_bytes,
-                                            uint32_t min_size) {
-  AVIFINFO_CHECK(box->content_size >= min_size, kInvalid);
-  AVIFINFO_CHECK(box->content_position + min_size <= num_bytes, kTruncated);
-  return kFound;
-}
-
 //------------------------------------------------------------------------------
-// Search if the file identifies itself as AVIF through an "ftyp" box.
 
-static AvifInfoInternalStatus ParseFileForBrand(const uint8_t* bytes,
-                                                uint32_t num_bytes,
-                                                uint32_t file_size,
-                                                uint32_t* num_parsed_boxes) {
-  uint32_t position = 0;  // Within 'bytes' (that points to first byte of file).
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, file_size, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "ftyp", 4)) {
-      // Iterate over brands. See ISO/IEC 14496-12:2012(E) 4.3.1
-      AVIFINFO_CHECK(box.content_size >= 8, kInvalid);  // major_brand + version
-      for (uint32_t i = 0; i < box.content_size; i += 4) {
-        AVIFINFO_CHECK_FOUND(AccessContent(&box, num_bytes, i + 4));
-        if (i == 4) continue;  // Skip minor_version.
-        if (!memcmp(box.content + i, "avif", 4) ||
-            !memcmp(box.content + i, "avis", 4)) {
-          return kFound;
-        }
-        AVIFINFO_CHECK(i <= 32 * 4, kAborted);  // Be reasonable.
-      }
-      AVIFINFO_RETURN(kInvalid);  // Only one "ftyp" allowed per file.
-    }
-    position += box.size;
-    // File is valid only if the end of at least one box is at the same position
-    // as the end of the container. Oddities are caught when parsing further.
-  } while (position != file_size);
-  AVIFINFO_RETURN(kInvalid);  // There should be one "ftyp" box.
-}
-
-//------------------------------------------------------------------------------
-// Search the primary item ID through "meta > pitm" boxes.
-
-static AvifInfoInternalStatus ParseMetaForPrimaryItemId(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t max_num_bytes,
-    uint32_t* num_parsed_boxes, uint32_t* primary_item_id) {
-  uint32_t position = 0;  // Within 'bytes' (first byte of "meta" box content).
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "pitm", 4)) {
-      // See ISO/IEC 14496-12:2015(E) 8.11.4.2
-      const uint32_t num_bytes_per_id = (box.version == 0) ? 2 : 4;
-      AVIFINFO_CHECK_FOUND(AccessContent(&box, num_bytes, num_bytes_per_id));
-      *primary_item_id =
-          AvifInfoInternalReadBigEndian(box.content + 0, num_bytes_per_id);
-      return kFound;
-    }
-    position += box.size;
-  } while (position != max_num_bytes);
-
-  // According to ISO/IEC 14496-12:2012(E) 8.11.1.1, there is at most one "meta"
-  // per file. No "pitm" until now means never.
-  AVIFINFO_RETURN(kInvalid);
-}
-
-static AvifInfoInternalStatus ParseFileForPrimaryItemId(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t file_size,
-    uint32_t* num_parsed_boxes, uint32_t* primary_item_id) {
-  uint32_t position = 0;  // Within 'bytes' (that points to first byte of file).
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, file_size, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "meta", 4)) {
-      return ParseMetaForPrimaryItemId(
-          box.content, num_bytes - box.content_position, box.content_size,
-          num_parsed_boxes, primary_item_id);
-    }
-    position += box.size;
-  } while (position != file_size);
-  AVIFINFO_RETURN(kInvalid);  // No "meta" is an issue.
-}
-
-//------------------------------------------------------------------------------
-// Search the features of an item given its ID through "meta > iprp" boxes.
-
-static AvifInfoInternalStatus ParseIpcoForFeaturesInProperty(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t max_num_bytes,
-    uint32_t target_property_index, uint32_t* num_parsed_boxes,
-    AvifInfoFeatures* features) {
-  uint32_t position = 0;
+// Parses a 'stream' of an "ipco" box into 'features'.
+// "ispe" is used for width and height, "pixi" and "av1C" are used for bit depth
+// and number of channels, and "auxC" is used for alpha.
+static AvifInfoInternalStatus ParseIpco(AvifInfoInternalStream* stream,
+                                        uint32_t num_remaining_bytes,
+                                        uint32_t* num_parsed_boxes,
+                                        AvifInfoInternalFeatures* features) {
   uint32_t box_index = 1;  // 1-based index. Used for iterating over properties.
   do {
     AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(stream, num_remaining_bytes,
+                                                  num_parsed_boxes, &box));
 
-    if (box_index != target_property_index) {
-      // Skip.
-    } else if (features->width == 0 && !memcmp(box.type, "ispe", 4)) {
+    if (!memcmp(box.type, "ispe", 4)) {
       // See ISO/IEC 23008-12:2017(E) 6.5.3.2
-      AVIFINFO_CHECK_FOUND(AccessContent(&box, num_bytes, 4 + 4));
-      features->width = AvifInfoInternalReadBigEndian(box.content + 0, 4);
-      features->height = AvifInfoInternalReadBigEndian(box.content + 4, 4);
-      AVIFINFO_CHECK(features->width != 0 && features->height != 0, kInvalid);
-      return kFound;
-    } else if (features->num_channels == 0 && !memcmp(box.type, "pixi", 4)) {
+      const uint8_t* data;
+      AVIFINFO_CHECK(box.content_size >= 8, kInvalid);
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 8, &data));
+      const uint32_t width = AvifInfoInternalReadBigEndian(data + 0, 4);
+      const uint32_t height = AvifInfoInternalReadBigEndian(data + 4, 4);
+      AVIFINFO_CHECK(width != 0 && height != 0, kInvalid);
+      if (features->num_dim_props < AVIFINFO_MAX_FEATURES &&
+          box_index <= AVIFINFO_MAX_VALUE) {
+        features->dim_props[features->num_dim_props].property_index = box_index;
+        features->dim_props[features->num_dim_props].width = width;
+        features->dim_props[features->num_dim_props].height = height;
+        ++features->num_dim_props;
+      } else {
+        features->data_was_skipped = 1;
+      }
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size - 8));
+    } else if (!memcmp(box.type, "pixi", 4)) {
       // See ISO/IEC 23008-12:2017(E) 6.5.6.2
-      AVIFINFO_CHECK_FOUND(AccessContent(&box, num_bytes, 1));
-      features->num_channels =
-          AvifInfoInternalReadBigEndian(box.content + 0, 1);
-      AVIFINFO_CHECK(features->num_channels >= 1, kInvalid);
-      AVIFINFO_CHECK_FOUND(
-          AccessContent(&box, num_bytes, 1 + features->num_channels));
-      features->bit_depth = AvifInfoInternalReadBigEndian(box.content + 1, 1);
-      AVIFINFO_CHECK(features->bit_depth >= 1, kInvalid);
-      for (uint32_t i = 1; i < features->num_channels; ++i) {
-        const uint32_t bit_depth =
-            AvifInfoInternalReadBigEndian(box.content + 1 + i, 1);
+      const uint8_t* data;
+      AVIFINFO_CHECK(box.content_size >= 1, kInvalid);
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 1, &data));
+      const uint32_t num_channels = AvifInfoInternalReadBigEndian(data + 0, 1);
+      AVIFINFO_CHECK(num_channels >= 1, kInvalid);
+      AVIFINFO_CHECK(box.content_size >= 1 + num_channels, kInvalid);
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 1, &data));
+      const uint32_t bit_depth = AvifInfoInternalReadBigEndian(data, 1);
+      AVIFINFO_CHECK(bit_depth >= 1, kInvalid);
+      for (uint32_t i = 1; i < num_channels; ++i) {
+        AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 1, &data));
         // Bit depth should be the same for all channels.
-        AVIFINFO_CHECK(bit_depth == features->bit_depth, kInvalid);
+        AVIFINFO_CHECK(AvifInfoInternalReadBigEndian(data, 1) == bit_depth,
+                       kInvalid);
         AVIFINFO_CHECK(i <= 32, kAborted);  // Be reasonable.
       }
-      return kFound;
-    } else if (features->num_channels == 0 && !memcmp(box.type, "av1C", 4)) {
+      if (features->num_chan_props < AVIFINFO_MAX_FEATURES &&
+          box_index <= AVIFINFO_MAX_VALUE && bit_depth <= AVIFINFO_MAX_VALUE &&
+          num_channels <= AVIFINFO_MAX_VALUE) {
+        features->chan_props[features->num_chan_props].property_index =
+            box_index;
+        features->chan_props[features->num_chan_props].bit_depth = bit_depth;
+        features->chan_props[features->num_chan_props].num_channels =
+            num_channels;
+        ++features->num_chan_props;
+      } else {
+        features->data_was_skipped = 1;
+      }
+      AVIFINFO_CHECK_FOUND(
+          AvifInfoInternalSkip(stream, box.content_size - (1 + num_channels)));
+    } else if (!memcmp(box.type, "av1C", 4)) {
       // See AV1 Codec ISO Media File Format Binding 2.3.1
       // at https://aomediacodec.github.io/av1-isobmff/#av1c
       // Only parse the necessary third byte. Assume that the others are valid.
-      AVIFINFO_CHECK_FOUND(AccessContent(&box, num_bytes, 3));
-      const uint32_t fields = AvifInfoInternalReadBigEndian(box.content + 2, 1);
-      const int high_bitdepth = (fields & 0x40) != 0;
-      const int twelve_bit = (fields & 0x20) != 0;
-      const int monochrome = (fields & 0x10) != 0;
+      const uint8_t* data;
+      AVIFINFO_CHECK(box.content_size >= 3, kInvalid);
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 3, &data));
+      const int high_bitdepth = (data[2] & 0x40) != 0;
+      const int twelve_bit = (data[2] & 0x20) != 0;
+      const int monochrome = (data[2] & 0x10) != 0;
       if (twelve_bit) {
         AVIFINFO_CHECK(high_bitdepth, kInvalid);
       }
-      features->num_channels = monochrome ? 1 : 3;
-      features->bit_depth = high_bitdepth ? twelve_bit ? 12 : 10 : 8;
-      return kFound;
-    }
-    ++box_index;
-    position += box.size;
-  } while (position != max_num_bytes && box_index <= target_property_index);
-  AVIFINFO_RETURN(kNotFound);
-}
-
-static AvifInfoInternalStatus ParseIprpForFeaturesInProperty(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t max_num_bytes,
-    uint32_t target_property_index, uint32_t* num_parsed_boxes,
-    AvifInfoFeatures* features) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "ipco", 4)) {
-      return ParseIpcoForFeaturesInProperty(
-          box.content, num_bytes - box.content_position, box.content_size,
-          target_property_index, num_parsed_boxes, features);
-    }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kInvalid);  // No "ipco" in "iprp" is an issue.
-}
-
-static AvifInfoInternalStatus ParseIprpForFeatures(const uint8_t* bytes,
-                                                   uint32_t num_bytes,
-                                                   uint32_t max_num_bytes,
-                                                   uint32_t target_item_id,
-                                                   uint32_t* num_parsed_boxes,
-                                                   AvifInfoFeatures* features) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "ipma", 4)) {
-      // See ISO/IEC 23008-12:2017(E) 9.3.2
-      AVIFINFO_CHECK_FOUND(AccessContent(&box, num_bytes, 4));
-      const uint32_t entry_count =
-          AvifInfoInternalReadBigEndian(box.content + 0, 4);
-      uint32_t offset = 4;
-      const uint32_t id_num_bytes = (box.version < 1) ? 2 : 4;
-      const uint32_t index_num_bytes = (box.flags & 1) ? 2 : 1;
-      const uint32_t essential_bit_mask = (box.flags & 1) ? 0x8000 : 0x80;
-
-      for (uint32_t entry = 0; entry < entry_count; ++entry) {
-        AVIFINFO_CHECK_FOUND(
-            AccessContent(&box, num_bytes, offset + id_num_bytes + 1));
-        const uint32_t item_id =
-            AvifInfoInternalReadBigEndian(box.content + offset, id_num_bytes);
-
-        offset += id_num_bytes;
-        const uint32_t association_count =
-            AvifInfoInternalReadBigEndian(box.content + offset, 1);
-        offset += 1;
-
-        for (uint32_t property = 0; property < association_count; ++property) {
-          AVIFINFO_CHECK_FOUND(
-              AccessContent(&box, num_bytes, offset + index_num_bytes));
-          const uint32_t value = AvifInfoInternalReadBigEndian(
-              box.content + offset, index_num_bytes);
-          offset += index_num_bytes;
-
-          if (item_id == target_item_id) {
-            // const int essential = (value & essential_bit_mask);  // Unused.
-            const uint32_t property_index = (value & ~essential_bit_mask);
-
-            // Parse again at the same "iprp" level to find the associated
-            // "ipco" and the "ispe", "pixi" or "av1C" within.
-            const AvifInfoInternalStatus status =
-                ParseIprpForFeaturesInProperty(bytes, num_bytes, max_num_bytes,
-                                               property_index, num_parsed_boxes,
-                                               features);
-            if (status != kFound) {
-              // Stop in case of error, carry on if not found.
-              AVIFINFO_CHECK_NOT_FOUND(status);
-            } else if (features->width != 0 && features->height != 0 &&
-                       features->num_channels != 0 &&
-                       features->bit_depth != 0) {
-              return kFound;  // Found everything. Otherwise carry on.
-            }
-          }
-          AVIFINFO_CHECK(property <= 32, kAborted);  // Be reasonable.
-        }
-        AVIFINFO_CHECK(entry <= 32, kAborted);  // Be reasonable.
+      if (features->num_chan_props < AVIFINFO_MAX_FEATURES &&
+          box_index <= AVIFINFO_MAX_VALUE) {
+        features->chan_props[features->num_chan_props].property_index =
+            box_index;
+        features->chan_props[features->num_chan_props].bit_depth =
+            high_bitdepth ? twelve_bit ? 12 : 10 : 8;
+        features->chan_props[features->num_chan_props].num_channels =
+            monochrome ? 1 : 3;
+        ++features->num_chan_props;
+      } else {
+        features->data_was_skipped = 1;
       }
-
-      // According to ISO/IEC 14496-12:2012(E) 8.11.1.1, there is at most one
-      // "meta" per file. According to ISO/IEC 23008-12:2017(E) 9.3.1, there is
-      // exactly one "ipma" per "iprp" and at most one "iprp" per "meta".
-      // The primary properties shall have been found now.
-      if (features->width != 0 && features->height != 0) {
-        // Exception: The bit depth and number of channels may be referenced
-        //            in a tile and not in the primary item of item type "grid".
-        return kNotFound;  // Continue the search at a higher level.
-      }
-      AVIFINFO_RETURN(kInvalid);
-    }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kInvalid);  // No "ipma" in "iprp" is an issue.
-}
-
-static AvifInfoInternalStatus ParseMetaForFeatures(const uint8_t* bytes,
-                                                   uint32_t num_bytes,
-                                                   uint32_t max_num_bytes,
-                                                   uint32_t target_item_id,
-                                                   uint32_t* num_parsed_boxes,
-                                                   AvifInfoFeatures* features) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "iprp", 4)) {
-      return ParseIprpForFeatures(box.content, num_bytes - box.content_position,
-                                  box.content_size, target_item_id,
-                                  num_parsed_boxes, features);
-    }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kInvalid);  // No "iprp" in "meta" is an issue.
-}
-
-static AvifInfoInternalStatus ParseFileForFeatures(const uint8_t* bytes,
-                                                   uint32_t num_bytes,
-                                                   uint32_t file_size,
-                                                   uint32_t target_item_id,
-                                                   uint32_t* num_parsed_boxes,
-                                                   AvifInfoFeatures* features) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, file_size, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "meta", 4)) {
-      return ParseMetaForFeatures(box.content, num_bytes - box.content_position,
-                                  box.content_size, target_item_id,
-                                  num_parsed_boxes, features);
-    }
-    position += box.size;
-  } while (position != file_size);
-  AVIFINFO_RETURN(kInvalid);  // No "meta" is an issue.
-}
-
-//------------------------------------------------------------------------------
-// Search if a tile contains features through "meta > iref > dimg" boxes.
-
-static AvifInfoInternalStatus ParseIrefForFeaturesInTiles(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t max_num_bytes,
-    const uint8_t* meta_bytes, uint32_t meta_num_bytes,
-    uint32_t meta_max_num_bytes, uint32_t primary_item_id,
-    uint32_t* num_parsed_boxes, AvifInfoFeatures* features) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "dimg", 4)) {
-      // See ISO/IEC 14496-12:2015(E) 8.11.12.2
-      const uint32_t num_bytes_per_id = (box.version == 0) ? 2 : 4;
-      uint32_t offset = 0;
-      AVIFINFO_CHECK_FOUND(
-          AccessContent(&box, num_bytes, num_bytes_per_id + 2));
-      const uint32_t from_item_id =
-          AvifInfoInternalReadBigEndian(box.content + offset, num_bytes_per_id);
-      offset += num_bytes_per_id;
-      if (from_item_id == primary_item_id) {
-        const uint32_t reference_count =
-            AvifInfoInternalReadBigEndian(box.content + offset, 2);
-        offset += 2;
-        for (uint32_t i = 0; i < reference_count; ++i) {
-          AVIFINFO_CHECK_FOUND(
-              AccessContent(&box, num_bytes, offset + num_bytes_per_id));
-          const uint32_t to_item_id = AvifInfoInternalReadBigEndian(
-              box.content + offset, num_bytes_per_id);
-          offset += num_bytes_per_id;
-          AVIFINFO_CHECK(meta_bytes != NULL && meta_bytes < bytes, kInvalid);
-          AVIFINFO_CHECK(meta_max_num_bytes > 0, kInvalid);
-          // Go up one level: from "dimg" among "iref" to boxes among "meta".
-          AVIFINFO_CHECK_NOT_FOUND(ParseMetaForFeatures(
-              meta_bytes, meta_num_bytes, meta_max_num_bytes, to_item_id,
-              num_parsed_boxes, features));
-          // Trying the first tile should be enough. Check others just in case.
-          AVIFINFO_CHECK(i <= 32, kAborted);  // Be reasonable.
-        }
-      }
-    }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kNotFound);  // No "dimg" in "iref" is not an issue.
-}
-
-static AvifInfoInternalStatus ParseMetaForFeaturesInTiles(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t max_num_bytes,
-    uint32_t primary_item_id, uint32_t* num_parsed_boxes,
-    AvifInfoFeatures* features) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "iref", 4)) {
-      return ParseIrefForFeaturesInTiles(
-          box.content, num_bytes - box.content_position, box.content_size,
-          bytes, num_bytes, max_num_bytes, primary_item_id, num_parsed_boxes,
-          features);
-    }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kNotFound);  // No "iref" in "meta" is not an issue.
-}
-
-static AvifInfoInternalStatus ParseFileForFeaturesInTiles(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t file_size,
-    uint32_t primary_item_id, uint32_t* num_parsed_boxes,
-    AvifInfoFeatures* features) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, file_size, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "meta", 4)) {
-      return ParseMetaForFeaturesInTiles(
-          box.content, num_bytes - box.content_position, box.content_size,
-          primary_item_id, num_parsed_boxes, features);
-    }
-    position += box.size;
-  } while (position != file_size);
-  AVIFINFO_RETURN(kInvalid);  // No "meta" is an issue.
-}
-
-//------------------------------------------------------------------------------
-// Search if there is an alpha layer through "meta > iprp > ipco > auxC" boxes.
-
-static AvifInfoInternalStatus ParseIpcoForAlpha(const uint8_t* bytes,
-                                                uint32_t num_bytes,
-                                                uint32_t max_num_bytes,
-                                                uint32_t* num_parsed_boxes) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "auxC", 4)) {
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size - 3));
+    } else if (!memcmp(box.type, "auxC", 4)) {
       // See AV1 Image File Format (AVIF) 4
       // at https://aomediacodec.github.io/av1-avif/#auxiliary-images
       const char* kAlphaStr = "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha";
       const uint32_t kAlphaStrLength = 44;  // Includes terminating character.
       if (box.content_size >= kAlphaStrLength) {
-        AVIFINFO_CHECK(box.content_position + kAlphaStrLength <= num_bytes,
-                       kTruncated);
-        const char* const aux_type = (const char*)box.content;
+        const uint8_t* data;
+        AVIFINFO_CHECK_FOUND(
+            AvifInfoInternalRead(stream, kAlphaStrLength, &data));
+        const char* const aux_type = (const char*)data;
         if (strcmp(aux_type, kAlphaStr) == 0) {
           // Note: It is unlikely but it is possible that this alpha plane does
           //       not belong to the primary item or a tile. Ignore this issue.
-          return kFound;
+          features->has_alpha = 1;
         }
+        AVIFINFO_CHECK_FOUND(
+            AvifInfoInternalSkip(stream, box.content_size - kAlphaStrLength));
+      } else {
+        AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
       }
+    } else {
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
     }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kNotFound);  // No "auxC" in "ipco" is not an issue.
+    ++box_index;
+    num_remaining_bytes -= box.size;
+  } while (num_remaining_bytes > 0);
+  AVIFINFO_RETURN(kNotFound);
 }
 
-static AvifInfoInternalStatus ParseIprpForAlpha(const uint8_t* bytes,
-                                                uint32_t num_bytes,
-                                                uint32_t max_num_bytes,
-                                                uint32_t* num_parsed_boxes) {
-  uint32_t position = 0;
+// Parses a 'stream' of an "iprp" box into 'features'. The "ipco" box contain
+// the properties which are linked to items by the "ipma" box.
+static AvifInfoInternalStatus ParseIprp(AvifInfoInternalStream* stream,
+                                        uint32_t num_remaining_bytes,
+                                        uint32_t* num_parsed_boxes,
+                                        AvifInfoInternalFeatures* features) {
   do {
     AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(stream, num_remaining_bytes,
+                                                  num_parsed_boxes, &box));
 
     if (!memcmp(box.type, "ipco", 4)) {
-      return ParseIpcoForAlpha(box.content, num_bytes - box.content_position,
-                               box.content_size, num_parsed_boxes);
+      AVIFINFO_CHECK_NOT_FOUND(
+          ParseIpco(stream, box.content_size, num_parsed_boxes, features));
+    } else if (!memcmp(box.type, "ipma", 4)) {
+      // See ISO/IEC 23008-12:2017(E) 9.3.2
+      uint32_t num_read_bytes = 4;
+      const uint8_t* data;
+      AVIFINFO_CHECK(box.content_size >= num_read_bytes, kInvalid);
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 4, &data));
+      const uint32_t entry_count = AvifInfoInternalReadBigEndian(data, 4);
+      const uint32_t id_num_bytes = (box.version < 1) ? 2 : 4;
+      const uint32_t index_num_bytes = (box.flags & 1) ? 2 : 1;
+      const uint32_t essential_bit_mask = (box.flags & 1) ? 0x8000 : 0x80;
+
+      for (uint32_t entry = 0; entry < entry_count; ++entry) {
+        if (entry >= AVIFINFO_MAX_PROPS ||
+            features->num_props >= AVIFINFO_MAX_PROPS) {
+          features->data_was_skipped = 1;
+          break;
+        }
+        num_read_bytes += id_num_bytes + 1;
+        AVIFINFO_CHECK(box.content_size >= num_read_bytes, kInvalid);
+        AVIFINFO_CHECK_FOUND(
+            AvifInfoInternalRead(stream, id_num_bytes + 1, &data));
+        const uint32_t item_id =
+            AvifInfoInternalReadBigEndian(data, id_num_bytes);
+        const uint32_t association_count =
+            AvifInfoInternalReadBigEndian(data + id_num_bytes, 1);
+
+        uint32_t property;
+        for (property = 0; property < association_count; ++property) {
+          if (property >= AVIFINFO_MAX_PROPS ||
+              features->num_props >= AVIFINFO_MAX_PROPS) {
+            features->data_was_skipped = 1;
+            break;
+          }
+          num_read_bytes += index_num_bytes;
+          AVIFINFO_CHECK(box.content_size >= num_read_bytes, kInvalid);
+          AVIFINFO_CHECK_FOUND(
+              AvifInfoInternalRead(stream, index_num_bytes, &data));
+          const uint32_t value =
+              AvifInfoInternalReadBigEndian(data, index_num_bytes);
+          // const int essential = (value & essential_bit_mask);  // Unused.
+          const uint32_t property_index = (value & ~essential_bit_mask);
+          if (property_index <= AVIFINFO_MAX_VALUE &&
+              item_id <= AVIFINFO_MAX_VALUE) {
+            features->props[features->num_props].property_index =
+                property_index;
+            features->props[features->num_props].item_id = item_id;
+            ++features->num_props;
+          } else {
+            features->data_was_skipped = 1;
+          }
+        }
+        if (property < association_count) break;  // Do not read garbage.
+      }
+
+      // If all features are available now, do not look further.
+      AVIFINFO_CHECK_NOT_FOUND(
+          AvifInfoInternalGetPrimaryItemFeatures(features));
+
+      AVIFINFO_CHECK_FOUND(
+          AvifInfoInternalSkip(stream, box.content_size - num_read_bytes));
+    } else {
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
     }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kInvalid);  // No "ipco" in "iprp" is an issue.
-}
-
-static AvifInfoInternalStatus ParseMetaForAlpha(const uint8_t* bytes,
-                                                uint32_t num_bytes,
-                                                uint32_t max_num_bytes,
-                                                uint32_t* num_parsed_boxes) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, max_num_bytes, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "iprp", 4)) {
-      return ParseIprpForAlpha(box.content, num_bytes - box.content_position,
-                               box.content_size, num_parsed_boxes);
-    }
-    position += box.size;
-  } while (position != max_num_bytes);
-  AVIFINFO_RETURN(kInvalid);  // No "iprp" in "meta" is an issue.
-}
-
-static AvifInfoInternalStatus ParseFileForAlpha(const uint8_t* bytes,
-                                                uint32_t num_bytes,
-                                                uint32_t file_size,
-                                                uint32_t* num_parsed_boxes) {
-  uint32_t position = 0;
-  do {
-    AvifInfoInternalBox box;
-    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
-        bytes, num_bytes, file_size, position, num_parsed_boxes, &box));
-
-    if (!memcmp(box.type, "meta", 4)) {
-      return ParseMetaForAlpha(box.content, num_bytes - box.content_position,
-                               box.content_size, num_parsed_boxes);
-    }
-    position += box.size;
-  } while (position != file_size);
-  AVIFINFO_RETURN(kInvalid);  // No "meta" is an issue.
+    num_remaining_bytes -= box.size;
+  } while (num_remaining_bytes != 0);
+  AVIFINFO_RETURN(kNotFound);
 }
 
 //------------------------------------------------------------------------------
-// Parsing starting point.
 
-static AvifInfoInternalStatus AvifInfoInternalParseFile(
-    const uint8_t* bytes, uint32_t num_bytes, uint32_t file_size,
-    AvifInfoFeatures* features) {
-  uint32_t num_parsed_boxes = 0;
-  AVIFINFO_CHECK_FOUND(
-      ParseFileForBrand(bytes, num_bytes, file_size, &num_parsed_boxes));
+// Parses a 'stream' of an "iref" box into 'features'.
+// The "dimg" boxes contain links between tiles and their parent items, which
+// can be used to infer bit depth and number of channels for the primary item
+// when the latter does not have these properties.
+static AvifInfoInternalStatus ParseIref(AvifInfoInternalStream* stream,
+                                        uint32_t num_remaining_bytes,
+                                        uint32_t* num_parsed_boxes,
+                                        AvifInfoInternalFeatures* features) {
+  do {
+    AvifInfoInternalBox box;
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(stream, num_remaining_bytes,
+                                                  num_parsed_boxes, &box));
 
-  // 'bytes' is an AVIF file. Next step is finding the ID of the primary item.
-  uint32_t primary_item_id;
-  AVIFINFO_CHECK_FOUND(ParseFileForPrimaryItemId(
-      bytes, num_bytes, file_size, &num_parsed_boxes, &primary_item_id));
+    if (!memcmp(box.type, "dimg", 4)) {
+      // See ISO/IEC 14496-12:2015(E) 8.11.12.2
+      const uint32_t num_bytes_per_id = (box.version == 0) ? 2 : 4;
+      uint32_t num_read_bytes = num_bytes_per_id + 2;
+      const uint8_t* data;
+      AVIFINFO_CHECK(box.content_size >= num_read_bytes, kInvalid);
+      AVIFINFO_CHECK_FOUND(
+          AvifInfoInternalRead(stream, num_bytes_per_id + 2, &data));
+      const uint32_t from_item_id =
+          AvifInfoInternalReadBigEndian(data, num_bytes_per_id);
+      const uint32_t reference_count =
+          AvifInfoInternalReadBigEndian(data + num_bytes_per_id, 2);
 
-  // Now find the 'features' of the primary item.
-  AvifInfoInternalStatus status =
-      ParseFileForFeatures(bytes, num_bytes, file_size, primary_item_id,
-                           &num_parsed_boxes, features);
-  if (status == kNotFound) {
-    // It is possible that some of the 'features' are missing for the primary
-    // item. Try to look into tiles in case they are defined there.
-    status = ParseFileForFeaturesInTiles(bytes, num_bytes, file_size,
-                                         primary_item_id, &num_parsed_boxes,
-                                         features);
-  }
-  AVIFINFO_CHECK_FOUND(status);
+      for (uint32_t i = 0; i < reference_count; ++i) {
+        if (i >= AVIFINFO_MAX_TILES) {
+          features->data_was_skipped = 1;
+          break;
+        }
+        num_read_bytes += num_bytes_per_id;
+        AVIFINFO_CHECK(box.content_size >= num_read_bytes, kInvalid);
+        AVIFINFO_CHECK_FOUND(
+            AvifInfoInternalRead(stream, num_bytes_per_id, &data));
+        const uint32_t to_item_id =
+            AvifInfoInternalReadBigEndian(data, num_bytes_per_id);
+        if (from_item_id <= AVIFINFO_MAX_VALUE &&
+            to_item_id <= AVIFINFO_MAX_VALUE &&
+            features->num_tiles < AVIFINFO_MAX_TILES) {
+          features->tiles[features->num_tiles].tile_item_id = to_item_id;
+          features->tiles[features->num_tiles].parent_item_id = from_item_id;
+          ++features->num_tiles;
+        } else {
+          features->data_was_skipped = 1;
+        }
+      }
 
-  // If there is an alpha plane, add 1 to the number of channels.
-  status = ParseFileForAlpha(bytes, num_bytes, file_size, &num_parsed_boxes);
-  if (status == kFound) {
-    ++features->num_channels;
-  } else {
-    AVIFINFO_CHECK_NOT_FOUND(status);
-  }
-  return kFound;
+      // If all features are available now, do not look further.
+      AVIFINFO_CHECK_NOT_FOUND(
+          AvifInfoInternalGetPrimaryItemFeatures(features));
+    } else {
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
+    }
+    num_remaining_bytes -= box.size;
+  } while (num_remaining_bytes > 0);
+  AVIFINFO_RETURN(kNotFound);
 }
 
 //------------------------------------------------------------------------------
-// Public API
+
+// Parses a 'stream' of a "meta" box. It looks for the primary item ID in the
+// "pitm" box and recurses into other boxes to find its 'features'.
+static AvifInfoInternalStatus ParseMeta(AvifInfoInternalStream* stream,
+                                        uint32_t num_remaining_bytes,
+                                        uint32_t* num_parsed_boxes,
+                                        AvifInfoInternalFeatures* features) {
+  do {
+    AvifInfoInternalBox box;
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(stream, num_remaining_bytes,
+                                                  num_parsed_boxes, &box));
+
+    if (!memcmp(box.type, "pitm", 4)) {
+      // See ISO/IEC 14496-12:2015(E) 8.11.4.2
+      const uint32_t num_bytes_per_id = (box.version == 0) ? 2 : 4;
+      const uint8_t* data;
+      AVIFINFO_CHECK(num_bytes_per_id <= num_remaining_bytes, kInvalid);
+      AVIFINFO_CHECK_FOUND(
+          AvifInfoInternalRead(stream, num_bytes_per_id, &data));
+      const uint32_t primary_item_id =
+          AvifInfoInternalReadBigEndian(data, num_bytes_per_id);
+      AVIFINFO_CHECK(primary_item_id <= AVIFINFO_MAX_VALUE, kAborted);
+      features->has_primary_item = 1;
+      features->primary_item_id = primary_item_id;
+      AVIFINFO_CHECK_FOUND(
+          AvifInfoInternalSkip(stream, box.content_size - num_bytes_per_id));
+    } else if (!memcmp(box.type, "iprp", 4)) {
+      AVIFINFO_CHECK_NOT_FOUND(
+          ParseIprp(stream, box.content_size, num_parsed_boxes, features));
+    } else if (!memcmp(box.type, "iref", 4)) {
+      AVIFINFO_CHECK_NOT_FOUND(
+          ParseIref(stream, box.content_size, num_parsed_boxes, features));
+    } else {
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
+    }
+    num_remaining_bytes -= box.size;
+  } while (num_remaining_bytes != 0);
+  // According to ISO/IEC 14496-12:2012(E) 8.11.1.1 there is at most one "meta".
+  AVIFINFO_RETURN(features->data_was_skipped ? kAborted : kInvalid);
+}
+
+//------------------------------------------------------------------------------
+
+// Parses a file 'stream'. The file type is checked through the "ftyp" box and
+// 'features' are extracted through the "meta" box.
+static AvifInfoInternalStatus ParseFile(AvifInfoInternalStream* stream,
+                                        uint32_t num_remaining_bytes,
+                                        uint32_t* num_parsed_boxes,
+                                        AvifInfoInternalFeatures* features) {
+  do {
+    AvifInfoInternalBox box;
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(stream, num_remaining_bytes,
+                                                  num_parsed_boxes, &box));
+    // The first box must be "ftyp" and no other box at root can be "ftyp".
+    AVIFINFO_CHECK((*num_parsed_boxes == 1) == !memcmp(box.type, "ftyp", 4),
+                   kInvalid);
+
+    if (!memcmp(box.type, "ftyp", 4)) {
+      // Iterate over brands. See ISO/IEC 14496-12:2012(E) 4.3.1
+      AVIFINFO_CHECK(box.content_size >= 8, kInvalid);  // major_brand + version
+      uint8_t is_avif = 0;
+      for (uint32_t i = 0; i + 4 <= box.content_size; i += 4) {
+        const uint8_t* data;
+        AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 4, &data));
+        if (i == 4) continue;  // Skip minor_version.
+        if (!memcmp(data, "avif", 4) || !memcmp(data, "avis", 4)) {
+          is_avif = 1;
+          AVIFINFO_CHECK_FOUND(
+              AvifInfoInternalSkip(stream, box.content_size - (i + 4)));
+          break;
+        }
+        AVIFINFO_CHECK(i <= 32 * 4, kAborted);  // Be reasonable.
+      }
+      AVIFINFO_CHECK(is_avif, kInvalid);
+    } else if (!memcmp(box.type, "meta", 4)) {
+      return ParseMeta(stream, box.content_size, num_parsed_boxes, features);
+    } else {
+      AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
+    }
+    num_remaining_bytes -= box.size;
+  } while (num_remaining_bytes != 0);
+  AVIFINFO_RETURN(kInvalid);  // No "meta" no good.
+}
+
+//------------------------------------------------------------------------------
+// Helpers for converting the fixed-size input public API to the streamed one.
+
+typedef struct {
+  const uint8_t* data;
+  size_t data_size;
+} AvifInfoInternalForward;
+
+static const uint8_t* AvifInfoInternalForwardRead(void* stream,
+                                                  size_t num_bytes) {
+  AvifInfoInternalForward* forward = (AvifInfoInternalForward*)stream;
+  if (num_bytes > forward->data_size) return NULL;
+  const uint8_t* data = forward->data;
+  forward->data += num_bytes;
+  forward->data_size -= num_bytes;
+  return data;
+}
+
+static void AvifInfoInternalForwardSkip(void* stream, size_t num_bytes) {
+  AvifInfoInternalForward* forward = (AvifInfoInternalForward*)stream;
+  if (num_bytes > forward->data_size) num_bytes = forward->data_size;
+  forward->data += num_bytes;
+  forward->data_size -= num_bytes;
+}
+
+//------------------------------------------------------------------------------
+// Fixed-size input public API
 
 AvifInfoStatus AvifInfoGet(const uint8_t* data, size_t data_size,
                            AvifInfoFeatures* features) {
   // Consider the file to be of maximum size.
   return AvifInfoGetWithSize(data, data_size, features,
-                             /*file_size=*/kAvifInfoInternalMaxSize);
+                             /*file_size=*/AVIFINFO_MAX_SIZE);
 }
 
 AvifInfoStatus AvifInfoGetWithSize(const uint8_t* data, size_t data_size,
                                    AvifInfoFeatures* features,
                                    size_t file_size) {
-  if (features != NULL) memset(features, 0, sizeof(*features));
-  if (data == NULL) return kAvifInfoNotEnoughData;
-  if (data_size > file_size) data_size = file_size;
+  AvifInfoInternalForward stream;
+  stream.data = data;
+  stream.data_size = data_size;
+  // Forward null 'data' as a null 'stream' to handle it the same way.
+  return AvifInfoReadWithSize(
+      (void*)&stream, (data == NULL) ? NULL : AvifInfoInternalForwardRead,
+      AvifInfoInternalForwardSkip, features, file_size);
+}
 
-  AvifInfoFeatures parsed_features;
-  memset(&parsed_features, 0, sizeof(parsed_features));
-  const AvifInfoInternalStatus status = AvifInfoInternalParseFile(
-      data,
-      (data_size >= kAvifInfoInternalMaxSize) ? kAvifInfoInternalMaxSize
-                                              : (uint32_t)data_size,
-      (file_size >= kAvifInfoInternalMaxSize) ? kAvifInfoInternalMaxSize
-                                              : (uint32_t)file_size,
-      &parsed_features);
+//------------------------------------------------------------------------------
+// Streamed input API
+
+AvifInfoStatus AvifInfoRead(void* stream, read_stream_t read,
+                            skip_stream_t skip, AvifInfoFeatures* features) {
+  // Consider the file to be of maximum size.
+  return AvifInfoReadWithSize(stream, read, skip, features,
+                              /*file_size=*/AVIFINFO_MAX_SIZE);
+}
+
+AvifInfoStatus AvifInfoReadWithSize(void* stream, read_stream_t read,
+                                    skip_stream_t skip,
+                                    AvifInfoFeatures* features,
+                                    size_t file_size) {
+  if (features != NULL) memset(features, 0, sizeof(*features));
+  if (read == NULL) return kAvifInfoNotEnoughData;
+
+  AvifInfoInternalStream internal_stream;
+  internal_stream.stream = stream;
+  internal_stream.read = read;
+  internal_stream.skip = skip;  // Fallbacks to 'read' if null.
+  internal_stream.num_read_bytes = 0;
+  const uint32_t size = (file_size >= AVIFINFO_MAX_SIZE) ? AVIFINFO_MAX_SIZE
+                                                         : (uint32_t)file_size;
+  uint32_t num_parsed_boxes = 0;
+  AvifInfoInternalFeatures internal_features;
+  memset(&internal_features, AVIFINFO_UNDEFINED, sizeof(internal_features));
+
+  // Go through all relevant boxes sequentially.
+  const AvifInfoInternalStatus status =
+      ParseFile(&internal_stream, size, &num_parsed_boxes, &internal_features);
 
   if (status == kNotFound) {
-    return (data_size < file_size) ? kAvifInfoNotEnoughData
-                                   : kAvifInfoInvalidFile;
+    return (internal_stream.num_read_bytes < file_size) ? kAvifInfoNotEnoughData
+                                                        : kAvifInfoInvalidFile;
   }
   if (status == kTruncated) return kAvifInfoNotEnoughData;
   if (status == kInvalid) return kAvifInfoInvalidFile;
   if (status == kAborted) return kAvifInfoTooComplex;
   if (features != NULL) {
-    memcpy(features, &parsed_features, sizeof(*features));
+    memcpy(features, &internal_features.primary_item_features,
+           sizeof(*features));
   }
   return kAvifInfoOk;
 }
-
-//------------------------------------------------------------------------------
-
-#undef AVIFINFO_RETURN
-#undef AVIFINFO_CHECK
-#undef AVIFINFO_CHECK_STATUS_IS
-#undef AVIFINFO_CHECK_FOUND
-#undef AVIFINFO_CHECK_NOT_FOUND
