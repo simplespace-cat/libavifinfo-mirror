@@ -47,7 +47,8 @@ static void StreamSkip(void* stream, size_t num_bytes) {
 
 // Test a random bitstream of random size, whether it is valid or not.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
-  AvifInfoStatus previous_status = kAvifInfoNotEnoughData;
+  AvifInfoStatus previous_status_identity = kAvifInfoNotEnoughData;
+  AvifInfoStatus previous_status_features = kAvifInfoNotEnoughData;
   AvifInfoFeatures previous_features = {0};
 
   // Check the consistency of the returned status and features:
@@ -56,22 +57,26 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
   for (size_t size = 0; size < data_size; ++size) {
     StreamData stream = {data, size};
     AvifInfoFeatures features;
-    const AvifInfoStatus status =
-        AvifInfoRead(&stream, StreamRead, StreamSkip, &features);
+    const AvifInfoStatus status_identity =
+        AvifInfoIdentifyStream(&stream, StreamRead, StreamSkip);
+    const AvifInfoStatus status_features =
+        AvifInfoGetFeaturesStream(&stream, StreamRead, StreamSkip, &features);
 
-    if (previous_status != kAvifInfoNotEnoughData &&
-        status != previous_status) {
+    if ((previous_status_identity != kAvifInfoNotEnoughData &&
+         status_identity != previous_status_identity) ||
+        (previous_status_features != kAvifInfoNotEnoughData &&
+         status_features != previous_status_features)) {
       std::abort();
     }
 
-    if (status == previous_status) {
+    if (status_features == previous_status_features) {
       if (features.width != previous_features.width ||
           features.height != previous_features.height ||
           features.bit_depth != previous_features.bit_depth ||
           features.num_channels != previous_features.num_channels) {
         std::abort();
       }
-    } else if (status == kAvifInfoOk) {
+    } else if (status_features == kAvifInfoOk) {
       if (features.width == 0u || features.height == 0u ||
           features.bit_depth == 0u || features.num_channels == 0u) {
         std::abort();
@@ -83,7 +88,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
       }
     }
 
-    previous_status = status;
+    previous_status_identity = status_identity;
+    previous_status_features = status_features;
     previous_features = features;
   }
   return 0;

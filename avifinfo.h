@@ -45,12 +45,16 @@ typedef struct {
 // Fixed-size input API
 // Use this API if a raw byte array of fixed size is available as input.
 
-// Parses the AVIF 'data' and extracts its 'features'.
+// Parses the 'data' and returns kAvifInfoOk if it is identified as an AVIF.
+// The file type can be identified in the first 12 bytes of most AVIF files.
+AvifInfoStatus AvifInfoIdentify(const uint8_t* data, size_t data_size);
+
+// Parses the identified AVIF 'data' and extracts its 'features'.
 // 'data' can be partial but must point to the beginning of the AVIF file.
 // The 'features' can be parsed in the first 450 bytes of most AVIF files.
 // 'features' are set to 0 unless kAvifInfoOk is returned.
-AvifInfoStatus AvifInfoGet(const uint8_t* data, size_t data_size,
-                           AvifInfoFeatures* features);
+AvifInfoStatus AvifInfoGetFeatures(const uint8_t* data, size_t data_size,
+                                   AvifInfoFeatures* features);
 
 //------------------------------------------------------------------------------
 // Streamed input API
@@ -69,11 +73,15 @@ typedef void (*skip_stream_t)(void* stream, size_t num_bytes);
 // Maximum number of bytes requested per read. There is no limit per skip.
 #define AVIFINFO_MAX_NUM_READ_BYTES 64
 
-// Same as AvifInfoGet() but takes a 'stream' as input. AvifInfoRead() does not
-// access the 'stream' directly but passes it as is to 'read' and 'skip'.
+// Same as AvifInfo*() but takes a 'stream' as input. AvifInfo*Stream() does
+// not access the 'stream' directly but passes it as is to 'read' and 'skip'.
 // 'read' cannot be null. If 'skip' is null, 'read' is called instead.
-AvifInfoStatus AvifInfoRead(void* stream, read_stream_t read,
-                            skip_stream_t skip, AvifInfoFeatures* features);
+AvifInfoStatus AvifInfoIdentifyStream(void* stream, read_stream_t read,
+                                      skip_stream_t skip);
+// Can be called right after AvifInfoIdentifyStream() with the same 'stream'.
+AvifInfoStatus AvifInfoGetFeaturesStream(void* stream, read_stream_t read,
+                                         skip_stream_t skip,
+                                         AvifInfoFeatures* features);
 
 //------------------------------------------------------------------------------
 

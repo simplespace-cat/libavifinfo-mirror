@@ -24,6 +24,13 @@ typedef enum {
   kInvalid,  // Input incorrectly parsed.
 } AvifInfoInternalStatus;
 
+static AvifInfoStatus AvifInfoInternalConvertStatus(AvifInfoInternalStatus s) {
+  return (s == kFound)                         ? kAvifInfoOk
+         : (s == kNotFound || s == kTruncated) ? kAvifInfoNotEnoughData
+         : (s == kAborted)                     ? kAvifInfoTooComplex
+                                               : kAvifInfoInvalidFile;
+}
+
 // uint32_t is used everywhere in this file. It is unlikely to be insufficient
 // to parse AVIF headers.
 #define AVIFINFO_MAX_SIZE UINT32_MAX
@@ -611,8 +618,30 @@ static AvifInfoInternalStatus ParseMeta(AvifInfoInternalStream* stream,
 
 //------------------------------------------------------------------------------
 
-// Parses a file 'stream'. The file type is checked through the "ftyp" box and
-// 'features' are extracted through the "meta" box.
+// Parses a file 'stream'. The file type is checked through the "ftyp" box.
+static AvifInfoInternalStatus ParseFtyp(AvifInfoInternalStream* stream) {
+  AvifInfoInternalBox box;
+  uint32_t num_parsed_boxes = 0;
+  AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(stream, AVIFINFO_MAX_SIZE,
+                                                &num_parsed_boxes, &box));
+  AVIFINFO_CHECK(!memcmp(box.type, "ftyp", 4), kInvalid);
+  // Iterate over brands. See ISO/IEC 14496-12:2012(E) 4.3.1
+  AVIFINFO_CHECK(box.content_size >= 8, kInvalid);  // major_brand,minor_version
+  for (uint32_t i = 0; i + 4 <= box.content_size; i += 4) {
+    const uint8_t* data;
+    AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 4, &data));
+    if (i == 4) continue;  // Skip minor_version.
+    if (!memcmp(data, "avif", 4) || !memcmp(data, "avis", 4)) {
+      AVIFINFO_CHECK_FOUND(
+          AvifInfoInternalSkip(stream, box.content_size - (i + 4)));
+      return kFound;
+    }
+    AVIFINFO_CHECK(i <= 32 * 4, kAborted);  // Be reasonable.
+  }
+  AVIFINFO_RETURN(kInvalid);  // No AVIF brand no good.
+}
+
+// Parses a file 'stream'. 'features' are extracted from the "meta" box.
 static AvifInfoInternalStatus ParseFile(AvifInfoInternalStream* stream,
                                         uint32_t* num_parsed_boxes,
                                         AvifInfoInternalFeatures* features) {
@@ -620,28 +649,7 @@ static AvifInfoInternalStatus ParseFile(AvifInfoInternalStream* stream,
     AvifInfoInternalBox box;
     AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(stream, AVIFINFO_MAX_SIZE,
                                                   num_parsed_boxes, &box));
-    // The first box must be "ftyp" and no other box at root can be "ftyp".
-    AVIFINFO_CHECK((*num_parsed_boxes == 1) == !memcmp(box.type, "ftyp", 4),
-                   kInvalid);
-
-    if (!memcmp(box.type, "ftyp", 4)) {
-      // Iterate over brands. See ISO/IEC 14496-12:2012(E) 4.3.1
-      AVIFINFO_CHECK(box.content_size >= 8, kInvalid);  // major_brand + version
-      uint8_t is_avif = 0;
-      for (uint32_t i = 0; i + 4 <= box.content_size; i += 4) {
-        const uint8_t* data;
-        AVIFINFO_CHECK_FOUND(AvifInfoInternalRead(stream, 4, &data));
-        if (i == 4) continue;  // Skip minor_version.
-        if (!memcmp(data, "avif", 4) || !memcmp(data, "avis", 4)) {
-          is_avif = 1;
-          AVIFINFO_CHECK_FOUND(
-              AvifInfoInternalSkip(stream, box.content_size - (i + 4)));
-          break;
-        }
-        AVIFINFO_CHECK(i <= 32 * 4, kAborted);  // Be reasonable.
-      }
-      AVIFINFO_CHECK(is_avif, kInvalid);
-    } else if (!memcmp(box.type, "meta", 4)) {
+    if (!memcmp(box.type, "meta", 4)) {
       return ParseMeta(stream, box.content_size, num_parsed_boxes, features);
     } else {
       AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
@@ -678,22 +686,43 @@ static void AvifInfoInternalForwardSkip(void* stream, size_t num_bytes) {
 //------------------------------------------------------------------------------
 // Fixed-size input public API
 
-AvifInfoStatus AvifInfoGet(const uint8_t* data, size_t data_size,
-                           AvifInfoFeatures* features) {
+AvifInfoStatus AvifInfoIdentify(const uint8_t* data, size_t data_size) {
   AvifInfoInternalForward stream;
   stream.data = data;
   stream.data_size = data_size;
   // Forward null 'data' as a null 'stream' to handle it the same way.
-  return AvifInfoRead((void*)&stream,
-                      (data == NULL) ? NULL : AvifInfoInternalForwardRead,
-                      AvifInfoInternalForwardSkip, features);
+  return AvifInfoIdentifyStream(
+      (void*)&stream, (data == NULL) ? NULL : AvifInfoInternalForwardRead,
+      AvifInfoInternalForwardSkip);
+}
+
+AvifInfoStatus AvifInfoGetFeatures(const uint8_t* data, size_t data_size,
+                                   AvifInfoFeatures* features) {
+  AvifInfoInternalForward stream;
+  stream.data = data;
+  stream.data_size = data_size;
+  return AvifInfoGetFeaturesStream(
+      (void*)&stream, (data == NULL) ? NULL : AvifInfoInternalForwardRead,
+      AvifInfoInternalForwardSkip, features);
 }
 
 //------------------------------------------------------------------------------
 // Streamed input API
 
-AvifInfoStatus AvifInfoRead(void* stream, read_stream_t read,
-                            skip_stream_t skip, AvifInfoFeatures* features) {
+AvifInfoStatus AvifInfoIdentifyStream(void* stream, read_stream_t read,
+                                    skip_stream_t skip) {
+  if (read == NULL) return kAvifInfoNotEnoughData;
+
+  AvifInfoInternalStream internal_stream;
+  internal_stream.stream = stream;
+  internal_stream.read = read;
+  internal_stream.skip = skip;  // Fallbacks to 'read' if null.
+  return AvifInfoInternalConvertStatus(ParseFtyp(&internal_stream));
+}
+
+AvifInfoStatus AvifInfoGetFeaturesStream(void* stream, read_stream_t read,
+                                    skip_stream_t skip,
+                                    AvifInfoFeatures* features) {
   if (features != NULL) memset(features, 0, sizeof(*features));
   if (read == NULL) return kAvifInfoNotEnoughData;
 
@@ -708,14 +737,9 @@ AvifInfoStatus AvifInfoRead(void* stream, read_stream_t read,
   // Go through all relevant boxes sequentially.
   const AvifInfoInternalStatus status =
       ParseFile(&internal_stream, &num_parsed_boxes, &internal_features);
-
-  if (status == kNotFound) return kAvifInfoNotEnoughData;
-  if (status == kTruncated) return kAvifInfoNotEnoughData;
-  if (status == kInvalid) return kAvifInfoInvalidFile;
-  if (status == kAborted) return kAvifInfoTooComplex;
-  if (features != NULL) {
+  if (status == kFound && features != NULL) {
     memcpy(features, &internal_features.primary_item_features,
            sizeof(*features));
   }
-  return kAvifInfoOk;
+  return AvifInfoInternalConvertStatus(status);
 }

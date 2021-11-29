@@ -41,9 +41,10 @@ TEST(AvifInfoGetTest, Ok) {
   const Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
 
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
-  EXPECT_TRUE(AreEqual(features, {1u, 1u, 8u, 3u}));
+  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  EXPECT_TRUE(AreEqual(f, {1u, 1u, 8u, 3u}));
 }
 
 TEST(AvifInfoGetTest, NoPixi10b) {
@@ -54,9 +55,10 @@ TEST(AvifInfoGetTest, NoPixi10b) {
       LoadFile("avifinfo_test_1x1_10b_nopixi_metasize64b_mdatsize0.avif");
   ASSERT_FALSE(input.empty());
 
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
-  EXPECT_TRUE(AreEqual(features, {1u, 1u, 10u, 3u}));
+  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  EXPECT_TRUE(AreEqual(f, {1u, 1u, 10u, 3u}));
 }
 
 TEST(AvifInfoGetTest, EnoughBytes) {
@@ -67,39 +69,28 @@ TEST(AvifInfoGetTest, EnoughBytes) {
   input.resize(std::search(input.begin(), input.end(), kMdatTag, kMdatTag + 4) -
                input.begin());
 
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
-  EXPECT_TRUE(AreEqual(features, {1u, 1u, 8u, 3u}));
-}
-
-TEST(AvifInfoGetTest, BigMetaBox) {
-  Data input = LoadFile("avifinfo_test_1x1.avif");
-  ASSERT_FALSE(input.empty());
-  // Change "meta" box size to the size 2^32-1.
-  const uint8_t kMetaTag[] = {'m', 'e', 't', 'a'};
-  auto meta_tag =
-      std::search(input.begin(), input.end(), kMetaTag, kMetaTag + 4);
-  meta_tag[-4] = meta_tag[-3] = meta_tag[-2] = meta_tag[-1] = 255;
-
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
-  EXPECT_TRUE(AreEqual(features, {1u, 1u, 8u, 3u}));
+  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  EXPECT_TRUE(AreEqual(f, {1u, 1u, 8u, 3u}));
 }
 
 TEST(AvifInfoGetTest, Null) {
   const Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
 
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), nullptr), kAvifInfoOk);
+  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), nullptr),
+            kAvifInfoOk);
 }
 
 //------------------------------------------------------------------------------
 // Negative tests
 
 TEST(AvifInfoGetTest, Empty) {
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(nullptr, 0, &features), kAvifInfoNotEnoughData);
-  EXPECT_TRUE(AreEqual(features, {0}));
+  EXPECT_EQ(AvifInfoIdentify(nullptr, 0), kAvifInfoNotEnoughData);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(nullptr, 0, &f), kAvifInfoNotEnoughData);
+  EXPECT_TRUE(AreEqual(f, {0}));
 }
 
 TEST(AvifInfoGetTest, NotEnoughBytes) {
@@ -110,8 +101,9 @@ TEST(AvifInfoGetTest, NotEnoughBytes) {
   input.resize(std::search(input.begin(), input.end(), kIpmaTag, kIpmaTag + 4) -
                input.begin());
 
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features),
+  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
             kAvifInfoNotEnoughData);
 }
 
@@ -122,10 +114,11 @@ TEST(AvifInfoGetTest, Broken) {
   const uint8_t kIspeTag[] = {'i', 's', 'p', 'e'};
   std::search(input.begin(), input.end(), kIspeTag, kIspeTag + 4)[0] = 'a';
 
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features),
+  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
             kAvifInfoInvalidFile);
-  EXPECT_TRUE(AreEqual(features, {0}));
+  EXPECT_TRUE(AreEqual(f, {0}));
 }
 
 TEST(AvifInfoGetTest, MetaBoxIsTooBig) {
@@ -139,10 +132,11 @@ TEST(AvifInfoGetTest, MetaBoxIsTooBig) {
   meta_tag[-1] = 1;  // 32-bit "1" then 4-char "meta" then 64-bit size.
   input.insert(meta_tag + 4, {255, 255, 255, 255, 255, 255, 255, 255});
 
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features),
+  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
             kAvifInfoTooComplex);
-  EXPECT_TRUE(AreEqual(features, {0}));
+  EXPECT_TRUE(AreEqual(f, {0}));
 }
 
 TEST(AvifInfoGetTest, TooManyBoxes) {
@@ -156,18 +150,22 @@ TEST(AvifInfoGetTest, TooManyBoxes) {
     input.insert(input.end(), kBox, kBox + kBox[3]);
   }
 
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGet(reinterpret_cast<uint8_t*>(input.data()),
-                        input.size() * 4, &features),
+  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeatures(reinterpret_cast<uint8_t*>(input.data()),
+                                input.size() * 4, &f),
             kAvifInfoTooComplex);
 }
 
 TEST(AvifInfoReadTest, Null) {
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoRead(/*stream=*/nullptr, /*read=*/nullptr, /*skip=*/nullptr,
-                         &features),
+  EXPECT_EQ(AvifInfoIdentifyStream(/*stream=*/nullptr, /*read=*/nullptr,
+                                   /*skip=*/nullptr),
             kAvifInfoNotEnoughData);
-  EXPECT_TRUE(AreEqual(features, {0}));
+  AvifInfoFeatures f;
+  EXPECT_EQ(AvifInfoGetFeaturesStream(/*stream=*/nullptr, /*read=*/nullptr,
+                                      /*skip=*/nullptr, &f),
+            kAvifInfoNotEnoughData);
+  EXPECT_TRUE(AreEqual(f, {0}));
 }
 
 //------------------------------------------------------------------------------
