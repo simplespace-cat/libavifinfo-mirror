@@ -94,7 +94,6 @@ typedef struct {
   read_stream_t read;       // Used to fetch more bytes from the 'stream'.
   skip_stream_t skip;       // Used to advance the position in the 'stream'.
                             // Fallback to 'read' if 'skip' is null.
-  uint32_t num_read_bytes;  // Total number of read bytes.
 } AvifInfoInternalStream;
 
 // Reads 'num_bytes' from the 'stream'. They are available at '*data'.
@@ -103,7 +102,6 @@ static AvifInfoInternalStatus AvifInfoInternalRead(
     AvifInfoInternalStream* stream, uint32_t num_bytes, const uint8_t** data) {
   *data = stream->read(stream->stream, num_bytes);
   AVIFINFO_CHECK(*data != NULL, kTruncated);
-  stream->num_read_bytes += num_bytes;
   return kFound;
 }
 
@@ -122,7 +120,6 @@ static AvifInfoInternalStatus AvifInfoInternalSkip(
       return AvifInfoInternalRead(stream, num_bytes, &unused);
     }
     stream->skip(stream->stream, num_bytes);
-    stream->num_read_bytes += num_bytes;
   }
   return kFound;
 }
@@ -270,8 +267,6 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
     box->size = num_remaining_bytes;
   }
   AVIFINFO_CHECK(box->size >= box_header_size, kInvalid);
-  AVIFINFO_CHECK(box->size <= AVIFINFO_MAX_SIZE - stream->num_read_bytes,
-                 kAborted);
   AVIFINFO_CHECK(box->size <= num_remaining_bytes, kInvalid);
 
   const int has_fullbox_header =
@@ -706,7 +701,6 @@ AvifInfoStatus AvifInfoRead(void* stream, read_stream_t read,
   internal_stream.stream = stream;
   internal_stream.read = read;
   internal_stream.skip = skip;  // Fallbacks to 'read' if null.
-  internal_stream.num_read_bytes = 0;
   uint32_t num_parsed_boxes = 0;
   AvifInfoInternalFeatures internal_features;
   memset(&internal_features, AVIFINFO_UNDEFINED, sizeof(internal_features));

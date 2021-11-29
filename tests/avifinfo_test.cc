@@ -29,6 +29,11 @@ Data LoadFile(const char file_name[]) {
                                                                      : Data();
 }
 
+bool AreEqual(const AvifInfoFeatures& a, const AvifInfoFeatures& b) {
+  return a.width == b.width && a.height == b.height &&
+         a.bit_depth == b.bit_depth && a.num_channels == b.num_channels;
+}
+
 //------------------------------------------------------------------------------
 // Positive tests
 
@@ -38,10 +43,7 @@ TEST(AvifInfoGetTest, Ok) {
 
   AvifInfoFeatures features;
   EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
-  EXPECT_EQ(features.width, 1u);
-  EXPECT_EQ(features.height, 1u);
-  EXPECT_EQ(features.bit_depth, 8u);
-  EXPECT_EQ(features.num_channels, 3u);
+  EXPECT_TRUE(AreEqual(features, {1u, 1u, 8u, 3u}));
 }
 
 TEST(AvifInfoGetTest, NoPixi10b) {
@@ -54,10 +56,7 @@ TEST(AvifInfoGetTest, NoPixi10b) {
 
   AvifInfoFeatures features;
   EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
-  EXPECT_EQ(features.width, 1u);
-  EXPECT_EQ(features.height, 1u);
-  EXPECT_EQ(features.bit_depth, 10u);
-  EXPECT_EQ(features.num_channels, 3u);
+  EXPECT_TRUE(AreEqual(features, {1u, 1u, 10u, 3u}));
 }
 
 TEST(AvifInfoGetTest, EnoughBytes) {
@@ -70,10 +69,21 @@ TEST(AvifInfoGetTest, EnoughBytes) {
 
   AvifInfoFeatures features;
   EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
-  EXPECT_EQ(features.width, 1u);
-  EXPECT_EQ(features.height, 1u);
-  EXPECT_EQ(features.bit_depth, 8u);
-  EXPECT_EQ(features.num_channels, 3u);
+  EXPECT_TRUE(AreEqual(features, {1u, 1u, 8u, 3u}));
+}
+
+TEST(AvifInfoGetTest, BigMetaBox) {
+  Data input = LoadFile("avifinfo_test_1x1.avif");
+  ASSERT_FALSE(input.empty());
+  // Change "meta" box size to the size 2^32-1.
+  const uint8_t kMetaTag[] = {'m', 'e', 't', 'a'};
+  auto meta_tag =
+      std::search(input.begin(), input.end(), kMetaTag, kMetaTag + 4);
+  meta_tag[-4] = meta_tag[-3] = meta_tag[-2] = meta_tag[-1] = 255;
+
+  AvifInfoFeatures features;
+  EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features), kAvifInfoOk);
+  EXPECT_TRUE(AreEqual(features, {1u, 1u, 8u, 3u}));
 }
 
 TEST(AvifInfoGetTest, Null) {
@@ -89,10 +99,7 @@ TEST(AvifInfoGetTest, Null) {
 TEST(AvifInfoGetTest, Empty) {
   AvifInfoFeatures features;
   EXPECT_EQ(AvifInfoGet(nullptr, 0, &features), kAvifInfoNotEnoughData);
-  EXPECT_EQ(features.width, 0u);
-  EXPECT_EQ(features.height, 0u);
-  EXPECT_EQ(features.bit_depth, 0u);
-  EXPECT_EQ(features.num_channels, 0u);
+  EXPECT_TRUE(AreEqual(features, {0}));
 }
 
 TEST(AvifInfoGetTest, NotEnoughBytes) {
@@ -118,28 +125,24 @@ TEST(AvifInfoGetTest, Broken) {
   AvifInfoFeatures features;
   EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features),
             kAvifInfoInvalidFile);
-  EXPECT_EQ(features.width, 0u);
-  EXPECT_EQ(features.height, 0u);
-  EXPECT_EQ(features.bit_depth, 0u);
-  EXPECT_EQ(features.num_channels, 0u);
+  EXPECT_TRUE(AreEqual(features, {0}));
 }
 
 TEST(AvifInfoGetTest, MetaBoxIsTooBig) {
   Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
-  // Change "meta" box size to the maximum size 2^32-1.
+  // Change "meta" box size to the maximum size 2^64-1.
   const uint8_t kMetaTag[] = {'m', 'e', 't', 'a'};
   auto meta_tag =
       std::search(input.begin(), input.end(), kMetaTag, kMetaTag + 4);
-  meta_tag[-4] = meta_tag[-3] = meta_tag[-2] = meta_tag[-1] = 255;
+  meta_tag[-4] = meta_tag[-3] = meta_tag[-2] = 0;
+  meta_tag[-1] = 1;  // 32-bit "1" then 4-char "meta" then 64-bit size.
+  input.insert(meta_tag + 4, {255, 255, 255, 255, 255, 255, 255, 255});
 
   AvifInfoFeatures features;
   EXPECT_EQ(AvifInfoGet(input.data(), input.size(), &features),
             kAvifInfoTooComplex);
-  EXPECT_EQ(features.width, 0u);
-  EXPECT_EQ(features.height, 0u);
-  EXPECT_EQ(features.bit_depth, 0u);
-  EXPECT_EQ(features.num_channels, 0u);
+  EXPECT_TRUE(AreEqual(features, {0}));
 }
 
 TEST(AvifInfoGetTest, TooManyBoxes) {
@@ -164,10 +167,7 @@ TEST(AvifInfoReadTest, Null) {
   EXPECT_EQ(AvifInfoRead(/*stream=*/nullptr, /*read=*/nullptr, /*skip=*/nullptr,
                          &features),
             kAvifInfoNotEnoughData);
-  EXPECT_EQ(features.width, 0u);
-  EXPECT_EQ(features.height, 0u);
-  EXPECT_EQ(features.bit_depth, 0u);
-  EXPECT_EQ(features.num_channels, 0u);
+  EXPECT_TRUE(AreEqual(features, {0}));
 }
 
 //------------------------------------------------------------------------------
