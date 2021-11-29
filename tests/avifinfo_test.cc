@@ -32,7 +32,7 @@ Data LoadFile(const char file_name[]) {
 //------------------------------------------------------------------------------
 // Positive tests
 
-TEST(AvifInfoGetTest, WithoutFileSize) {
+TEST(AvifInfoGetTest, Ok) {
   const Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
 
@@ -60,36 +60,6 @@ TEST(AvifInfoGetTest, NoPixi10b) {
   EXPECT_EQ(features.num_channels, 3u);
 }
 
-TEST(AvifInfoGetTest, WithFileSize) {
-  const Data input = LoadFile("avifinfo_test_1x1.avif");
-  ASSERT_FALSE(input.empty());
-
-  AvifInfoFeatures features;
-  EXPECT_EQ(AvifInfoGetWithSize(input.data(), /*data_size=*/input.size(),
-                                &features, /*file_size=*/input.size()),
-            kAvifInfoOk);
-  EXPECT_EQ(features.width, 1u);
-  EXPECT_EQ(features.height, 1u);
-  EXPECT_EQ(features.bit_depth, 8u);
-  EXPECT_EQ(features.num_channels, 3u);
-}
-
-TEST(AvifInfoGetTest, WithShorterSize) {
-  const Data input = LoadFile("avifinfo_test_1x1.avif");
-  ASSERT_FALSE(input.empty());
-
-  AvifInfoFeatures features;
-  // No more than 'file_size' bytes should be read, even if more are passed.
-  EXPECT_EQ(AvifInfoGetWithSize(input.data(), /*data_size=*/input.size() * 10,
-                                &features,
-                                /*file_size=*/input.size()),
-            kAvifInfoOk);
-  EXPECT_EQ(features.width, 1u);
-  EXPECT_EQ(features.height, 1u);
-  EXPECT_EQ(features.bit_depth, 8u);
-  EXPECT_EQ(features.num_channels, 3u);
-}
-
 TEST(AvifInfoGetTest, EnoughBytes) {
   Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
@@ -111,9 +81,6 @@ TEST(AvifInfoGetTest, Null) {
   ASSERT_FALSE(input.empty());
 
   EXPECT_EQ(AvifInfoGet(input.data(), input.size(), nullptr), kAvifInfoOk);
-  EXPECT_EQ(
-      AvifInfoGetWithSize(input.data(), input.size(), nullptr, input.size()),
-      kAvifInfoOk);
 }
 
 //------------------------------------------------------------------------------

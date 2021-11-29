@@ -56,8 +56,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
   for (size_t size = 0; size < data_size; ++size) {
     StreamData stream = {data, size};
     AvifInfoFeatures features;
-    const AvifInfoStatus status = AvifInfoReadWithSize(
-        &stream, StreamRead, StreamSkip, &features, data_size);
+    const AvifInfoStatus status =
+        AvifInfoRead(&stream, StreamRead, StreamSkip, &features);
 
     if (previous_status != kAvifInfoNotEnoughData &&
         status != previous_status) {

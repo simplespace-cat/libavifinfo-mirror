@@ -52,12 +52,6 @@ typedef struct {
 AvifInfoStatus AvifInfoGet(const uint8_t* data, size_t data_size,
                            AvifInfoFeatures* features);
 
-// Same as above with an extra argument 'file_size'. If the latter is known,
-// please use this version for extra bitstream validation.
-AvifInfoStatus AvifInfoGetWithSize(const uint8_t* data, size_t data_size,
-                                   AvifInfoFeatures* features,
-                                   size_t file_size);
-
 //------------------------------------------------------------------------------
 // Streamed input API
 // Use this API if the input bytes must be fetched and/or if the AVIF payload
@@ -75,24 +69,13 @@ typedef void (*skip_stream_t)(void* stream, size_t num_bytes);
 // Maximum number of bytes requested per read. There is no limit per skip.
 #define AVIFINFO_MAX_NUM_READ_BYTES 64
 
-// Same as AvifInfoGet*() but takes a 'stream' as input. AvifInfoRead*() does
-// not access the 'stream' directly but passes it as is to 'read' and 'skip'.
+// Same as AvifInfoGet() but takes a 'stream' as input. AvifInfoRead() does not
+// access the 'stream' directly but passes it as is to 'read' and 'skip'.
 // 'read' cannot be null. If 'skip' is null, 'read' is called instead.
 AvifInfoStatus AvifInfoRead(void* stream, read_stream_t read,
                             skip_stream_t skip, AvifInfoFeatures* features);
-AvifInfoStatus AvifInfoReadWithSize(void* stream, read_stream_t read,
-                                    skip_stream_t skip,
-                                    AvifInfoFeatures* features,
-                                    size_t file_size);
 
 //------------------------------------------------------------------------------
-
-// If needed, avifinfo.h and avifinfo.c can be merged into a single file:
-//   1. Replace this block comment by the content of avifinfo.c
-//   2. Discard #include "./avifinfo.h" and move other includes to the top
-//   3. Mark AvifInfo*() declarations and definitions as static
-// This procedure can be useful when only one translation unit uses avifinfo,
-// whether it includes the merged .h or the merged code is inserted into a file.
 
 #ifdef __cplusplus
 }  // extern "C"

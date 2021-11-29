@@ -17,8 +17,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "avifinfo.h"
 #include "avif/avif.h"
+#include "avifinfo.h"
 
 namespace {
 
@@ -70,8 +70,7 @@ Result DecodeAvif(const uint8_t data[], size_t data_size) {
 // Parses the AVIF at 'data' of 'data_size' bytes using libavifinfo.
 Result ParseAvif(const uint8_t data[], size_t data_size) {
   Result result;
-  const AvifInfoStatus status = AvifInfoGetWithSize(
-      data, data_size, &result.features, /*file_size=*/data_size);
+  const AvifInfoStatus status = AvifInfoGet(data, data_size, &result.features);
   result.success = (status == kAvifInfoOk);
   return result;
 }
@@ -89,8 +88,7 @@ Result ParseAvifForSize(const uint8_t data[], size_t data_size,
   size_t max_data_size = data_size;
   while (min_data_size < max_data_size) {
     const size_t middle = (min_data_size + max_data_size) / 2;
-    if (AvifInfoGetWithSize(data, middle, nullptr, /*file_size=*/data_size) ==
-        kAvifInfoOk) {
+    if (AvifInfoGet(data, middle, nullptr) == kAvifInfoOk) {
       max_data_size = middle;
     } else {
       min_data_size = middle + 1;
