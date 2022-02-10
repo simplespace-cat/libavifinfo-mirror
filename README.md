@@ -18,7 +18,9 @@ See `avifinfo_test.cc` for usage examples.
     1.  [Coding style](#coding-style)
     2.  [Submitting patches](#submitting-patches)
 
-3.  [Bug reports](#bug-reports)
+3.  [PHP implementation](#php-implementation)
+
+4.  [Bug reports](#bug-reports)
 
 ## How to use {#how-to-use}
 
@@ -73,6 +75,15 @@ used in this project.
 
 If you would like to contribute to **libavifinfo**, please follow the steps for
 **libaom** at https://aomedia.googlesource.com/aom/#submitting-patches.
+
+## PHP implementation
+
+`libavifinfo` was [implemented](https://github.com/php/php-src/pull/7711) into
+**php-src** natively and is available through `getimagesize()` at head. If it is
+not available in the PHP release version you use, you can fallback to
+`avifinfo.php` instead.
+
+See `avifinfo_test.php` for a usage example.
 
 ## Bug reports {#bug-reports}
 
