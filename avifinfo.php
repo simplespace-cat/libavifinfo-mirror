@@ -18,12 +18,13 @@ const TRUNCATED = 2; // Input correctly parsed until missing bytes to continue.
 const ABORTED   = 3; // Input correctly parsed until stopped to avoid timeout or crash.
 const INVALID   = 4; // Input incorrectly parsed.
 
-const MAX_SIZE     = 4294967295; // Unlikely to be insufficient to parse AVIF headers.
-const MAX_VALUE    = 255;        // Be reasonable. Avoid timeouts and out-of-memory.
-const MAX_TILES    = 16;         // Be reasonable.
-const MAX_PROPS    = 32;         // Be reasonable.
-const MAX_FEATURES = 8;          // Be reasonable.
-const UNDEFINED    = 0;          // Value was not yet parsed.
+const MAX_SIZE      = 4294967295; // Unlikely to be insufficient to parse AVIF headers.
+const MAX_NUM_BOXES = 4096;       // Be reasonable. Avoid timeouts and out-of-memory.
+const MAX_VALUE     = 255;
+const MAX_TILES     = 16;
+const MAX_PROPS     = 32;
+const MAX_FEATURES  = 8;
+const UNDEFINED     = 0;          // Value was not yet parsed.
 
 /**
  * Reads an unsigned integer with most significant bits first.
@@ -271,7 +272,7 @@ class Box {
     $this->content_size = $this->size - $header_size;
     // Avoid timeouts. The maximum number of parsed boxes is arbitrary.
     ++$num_parsed_boxes;
-    if ( $num_parsed_boxes >= 4096 ) {
+    if ( $num_parsed_boxes >= MAX_NUM_BOXES ) {
       return ABORTED;
     }
 
@@ -286,22 +287,13 @@ class Box {
       // See AV1 Image File Format (AVIF) 8.1
       // at https://aomediacodec.github.io/av1-avif/#avif-boxes (available when
       // https://github.com/AOMediaCodec/av1-avif/pull/170 is merged).
-      $is_parsable   = true;
-      if ( $this->type == 'meta' ) {
-        $is_parsable = ( $this->version <= 0 );
-      } else if ( $this->type == 'pitm' ) {
-        $is_parsable = ( $this->version <= 1 );
-      } else if ( $this->type == 'ipma' ) {
-        $is_parsable = ( $this->version <= 1 );
-      } else if ( $this->type == 'ispe' ) {
-        $is_parsable = ( $this->version <= 0 );
-      } else if ( $this->type == 'pixi' ) {
-        $is_parsable = ( $this->version <= 0 );
-      } else if ( $this->type == 'iref' ) {
-        $is_parsable = ( $this->version <= 1 );
-      } else if ( $this->type == 'auxC' ) {
-        $is_parsable = ( $this->version <= 0 );
-      }
+      $is_parsable = ( $this->type == 'meta' && $this->version <= 0 ) ||
+                     ( $this->type == 'pitm' && $this->version <= 1 ) ||
+                     ( $this->type == 'ipma' && $this->version <= 1 ) ||
+                     ( $this->type == 'ispe' && $this->version <= 0 ) ||
+                     ( $this->type == 'pixi' && $this->version <= 0 ) ||
+                     ( $this->type == 'iref' && $this->version <= 1 ) ||
+                     ( $this->type == 'auxC' && $this->version <= 0 );
       // Instead of considering this file as invalid, skip unparsable boxes.
       if ( !$is_parsable ) {
         $this->type = 'unknownversion';
