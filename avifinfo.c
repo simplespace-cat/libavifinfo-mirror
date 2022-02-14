@@ -34,14 +34,15 @@ static AvifInfoStatus AvifInfoInternalConvertStatus(AvifInfoInternalStatus s) {
 // uint32_t is used everywhere in this file. It is unlikely to be insufficient
 // to parse AVIF headers.
 #define AVIFINFO_MAX_SIZE UINT32_MAX
-// AvifInfoInternalFeatures uses uint8_t to store values and the number of
-// values is clamped to 32 to limit the stack size.
+// Be reasonable. Avoid timeouts and out-of-memory.
+#define AVIFINFO_MAX_NUM_BOXES 4096
+// AvifInfoInternalFeatures uses uint8_t to store values.
 #define AVIFINFO_MAX_VALUE UINT8_MAX
-#define AVIFINFO_UNDEFINED 0
 // Maximum number of stored associations. Past that, they are skipped.
 #define AVIFINFO_MAX_TILES 16
 #define AVIFINFO_MAX_PROPS 32
 #define AVIFINFO_MAX_FEATURES 8
+#define AVIFINFO_UNDEFINED 0
 
 // Reads an unsigned integer from 'input' with most significant bits first.
 // 'input' must be at least 'num_bytes'-long.
@@ -286,7 +287,7 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
   box->content_size = box->size - box_header_size;
   // Avoid timeouts. The maximum number of parsed boxes is arbitrary.
   ++*num_parsed_boxes;
-  AVIFINFO_CHECK(*num_parsed_boxes < 4096, kAborted);
+  AVIFINFO_CHECK(*num_parsed_boxes < AVIFINFO_MAX_NUM_BOXES, kAborted);
 
   box->version = 0;
   box->flags = 0;
@@ -297,14 +298,14 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
     // See AV1 Image File Format (AVIF) 8.1
     // at https://aomediacodec.github.io/av1-avif/#avif-boxes (available when
     // https://github.com/AOMediaCodec/av1-avif/pull/170 is merged).
-    uint32_t is_parsable = 1;
-    if (!memcmp(box->type, "meta", 4)) is_parsable = (box->version <= 0);
-    if (!memcmp(box->type, "pitm", 4)) is_parsable = (box->version <= 1);
-    if (!memcmp(box->type, "ipma", 4)) is_parsable = (box->version <= 1);
-    if (!memcmp(box->type, "ispe", 4)) is_parsable = (box->version <= 0);
-    if (!memcmp(box->type, "pixi", 4)) is_parsable = (box->version <= 0);
-    if (!memcmp(box->type, "iref", 4)) is_parsable = (box->version <= 1);
-    if (!memcmp(box->type, "auxC", 4)) is_parsable = (box->version <= 0);
+    const uint32_t is_parsable =
+        (!memcmp(box->type, "meta", 4) && box->version <= 0) ||
+        (!memcmp(box->type, "pitm", 4) && box->version <= 1) ||
+        (!memcmp(box->type, "ipma", 4) && box->version <= 1) ||
+        (!memcmp(box->type, "ispe", 4) && box->version <= 0) ||
+        (!memcmp(box->type, "pixi", 4) && box->version <= 0) ||
+        (!memcmp(box->type, "iref", 4) && box->version <= 1) ||
+        (!memcmp(box->type, "auxC", 4) && box->version <= 0);
     // Instead of considering this file as invalid, skip unparsable boxes.
     if (!is_parsable) memcpy(box->type, "\0skp", 4);  // \0 so not a valid type
   }
@@ -503,6 +504,7 @@ static AvifInfoInternalStatus ParseIprp(AvifInfoInternalStream* stream,
       AVIFINFO_CHECK_NOT_FOUND(
           AvifInfoInternalGetPrimaryItemFeatures(features));
 
+      // Mostly if 'data_was_skipped'.
       AVIFINFO_CHECK_FOUND(
           AvifInfoInternalSkip(stream, box.content_size - num_read_bytes));
     } else {
@@ -566,6 +568,10 @@ static AvifInfoInternalStatus ParseIref(AvifInfoInternalStream* stream,
       // If all features are available now, do not look further.
       AVIFINFO_CHECK_NOT_FOUND(
           AvifInfoInternalGetPrimaryItemFeatures(features));
+
+      // Mostly if 'data_was_skipped'.
+      AVIFINFO_CHECK_FOUND(
+          AvifInfoInternalSkip(stream, box.content_size - num_read_bytes));
     } else {
       AVIFINFO_CHECK_FOUND(AvifInfoInternalSkip(stream, box.content_size));
     }
