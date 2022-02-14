@@ -7,6 +7,7 @@
 // Media Patent License 1.0 was not distributed with this source code in the
 // PATENTS file, you can obtain it at www.aomedia.org/license/patent.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -16,17 +17,17 @@
 //------------------------------------------------------------------------------
 // Stream definition.
 
-typedef struct {
+struct StreamData {
   const uint8_t* data;
   size_t data_size;
-} StreamData;
+};
 
 static const uint8_t* StreamRead(void* stream, size_t num_bytes) {
-  if (stream == NULL) abort();
-  if (num_bytes < 1 || num_bytes > AVIFINFO_MAX_NUM_READ_BYTES) abort();
+  if (stream == nullptr) std::abort();
+  if (num_bytes < 1 || num_bytes > AVIFINFO_MAX_NUM_READ_BYTES) std::abort();
 
-  StreamData* stream_data = (StreamData*)stream;
-  if (num_bytes > stream_data->data_size) return NULL;
+  StreamData* stream_data = reinterpret_cast<StreamData*>(stream);
+  if (num_bytes > stream_data->data_size) return nullptr;
   const uint8_t* data = stream_data->data;
   stream_data->data += num_bytes;
   stream_data->data_size -= num_bytes;
@@ -34,11 +35,11 @@ static const uint8_t* StreamRead(void* stream, size_t num_bytes) {
 }
 
 static void StreamSkip(void* stream, size_t num_bytes) {
-  if (stream == NULL) abort();
-  if (num_bytes < 1) abort();
+  if (stream == nullptr) std::abort();
+  if (num_bytes < 1) std::abort();
 
-  StreamData* stream_data = (StreamData*)stream;
-  if (num_bytes > stream_data->data_size) num_bytes = stream_data->data_size;
+  StreamData* stream_data = reinterpret_cast<StreamData*>(stream);
+  num_bytes = std::min(num_bytes, stream_data->data_size);
   stream_data->data += num_bytes;
   stream_data->data_size -= num_bytes;
 }
@@ -55,6 +56,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
   // for a given size and a status that is not kAvifInfoNotEnoughData, any
   // bigger size (of the same data) should return the same status and features.
   for (size_t size = 0; size < data_size; ++size) {
+    // Speed up considerably once it is highly likely the header is parsed.
+    if (size > 4096) size = std::min(data_size, size + 511);
+
     StreamData stream = {data, size};
     AvifInfoFeatures features;
     const AvifInfoStatus status_identity =
