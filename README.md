@@ -1,7 +1,7 @@
 # AVIF-info
 
 **libavifinfo** is a standalone library that can be used to extract the width,
-height, bit depth and number of channels from an AVIF payload.
+height, bit depth, number of channels and other metadata from an AVIF payload.
 
 See `avifinfo.h` for details on the API and `avifinfo.c` for the implementation.
 See `avifinfo_test.cc` for usage examples.
@@ -77,6 +77,8 @@ If you would like to contribute to **libavifinfo**, please follow the steps for
 **libaom** at https://aomedia.googlesource.com/aom/#submitting-patches.
 
 ## PHP implementation
+
+The PHP implementation of libavifinfo is a subset of the C API.
 
 `libavifinfo` was [implemented](https://github.com/php/php-src/pull/7711) into
 **php-src** natively and is available through `getimagesize()` at head. If it is

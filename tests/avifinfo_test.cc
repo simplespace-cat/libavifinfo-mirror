@@ -29,9 +29,32 @@ Data LoadFile(const char file_name[]) {
                                                                      : Data();
 }
 
-bool AreEqual(const AvifInfoFeatures& a, const AvifInfoFeatures& b) {
-  return a.width == b.width && a.height == b.height &&
-         a.bit_depth == b.bit_depth && a.num_channels == b.num_channels;
+void WriteBigEndian(uint32_t value, uint32_t num_bytes, uint8_t* input) {
+  for (int i = num_bytes - 1; i >= 0; --i) {
+    input[i] = value & 0xff;
+    value >>= 8;
+  }
+}
+
+bool SetPrimaryItemIdToGainmapId(Data& input) {
+  AvifInfoFeatures f;
+  if (AvifInfoGetFeatures(input.data(), input.size(), &f) != kAvifInfoOk) {
+    return false;
+  }
+  WriteBigEndian(f.gainmap_item_id, f.primary_item_id_bytes,
+                 &input[f.primary_item_id_location]);
+  return true;
+}
+
+void ExpectEqual(const AvifInfoFeatures& actual, const AvifInfoFeatures& expected) {
+  EXPECT_EQ(actual.width, expected.width);
+  EXPECT_EQ(actual.height, expected.height);
+  EXPECT_EQ(actual.bit_depth, expected.bit_depth);
+  EXPECT_EQ(actual.num_channels, expected.num_channels);
+  EXPECT_EQ(actual.has_gainmap, expected.has_gainmap);
+  EXPECT_EQ(actual.gainmap_item_id, expected.gainmap_item_id);
+  EXPECT_EQ(actual.primary_item_id_location, expected.primary_item_id_location);
+  EXPECT_EQ(actual.primary_item_id_bytes, expected.primary_item_id_bytes);
 }
 
 //------------------------------------------------------------------------------
@@ -41,11 +64,69 @@ TEST(AvifInfoGetTest, Ok) {
   const Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
 
-  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
-  EXPECT_TRUE(AreEqual(f, {1u, 1u, 8u, 3u}));
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  ExpectEqual(f, {.width = 1u,
+                  .height = 1u,
+                  .bit_depth = 8u,
+                  .num_channels = 3u,
+                  .has_gainmap = 0u,
+                  .primary_item_id_location = 96u,
+                  .primary_item_id_bytes = 2u});
 }
+
+TEST(AvifInfoGetTest, WithAlpha) {
+  const Data input = LoadFile("avifinfo_test_2x2_alpha.avif");
+  ASSERT_FALSE(input.empty());
+
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  ExpectEqual(f, {.width = 2u,
+                  .height = 2u,
+                  .bit_depth = 8u,
+                  .num_channels = 4u,
+                  .has_gainmap = 0u,
+                  .primary_item_id_location = 96u,
+                  .primary_item_id_bytes = 2u});
+
+}
+
+TEST(AvifInfoGetTest, WithGainmap) {
+  const Data input = LoadFile("avifinfo_test_20x20_gainmap.avif");
+  ASSERT_FALSE(input.empty());
+
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  AvifInfoFeatures f;
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  ExpectEqual(f, {.width = 20u,
+                  .height = 20u,
+                  .bit_depth = 8u,
+                  .num_channels = 3u,
+                  .has_gainmap = 1u,
+                  .gainmap_item_id = 2u,
+                  .primary_item_id_location = 96u,
+                  .primary_item_id_bytes = 2u});
+
+  Data gainmap = input;
+  ASSERT_TRUE(SetPrimaryItemIdToGainmapId(gainmap));
+  ASSERT_EQ(AvifInfoIdentify(gainmap.data(), gainmap.size()), kAvifInfoOk);
+  AvifInfoFeatures gainmap_f;
+  ASSERT_EQ(AvifInfoGetFeatures(gainmap.data(), gainmap.size(), &gainmap_f),
+            kAvifInfoOk);
+  // TODO(maryla-uc): find a small test file with a gainmap that is smaller
+  // than the main image.
+  ExpectEqual(gainmap_f, {.width = 20u,
+                          .height = 20u,
+                          .bit_depth = 8u,
+                          .num_channels = 1u,  // the gainmap is monochrome
+                          .has_gainmap = 1u,
+                          .gainmap_item_id = 2u,
+                          .primary_item_id_location = 96u,
+                          .primary_item_id_bytes = 2u});
+}
+
 
 TEST(AvifInfoGetTest, NoPixi10b) {
   // Same as above but "meta" box size is stored as 64 bits, "av1C" has
@@ -55,10 +136,17 @@ TEST(AvifInfoGetTest, NoPixi10b) {
       LoadFile("avifinfo_test_1x1_10b_nopixi_metasize64b_mdatsize0.avif");
   ASSERT_FALSE(input.empty());
 
-  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
-  EXPECT_TRUE(AreEqual(f, {1u, 1u, 10u, 3u}));
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  ExpectEqual(f, {.width = 1u,
+                  .height = 1u,
+                  .bit_depth = 10u,
+                  .num_channels = 3u,
+                  .has_gainmap = 0u,
+                  .primary_item_id_location = 104u,
+                  .primary_item_id_bytes = 2u});
+
 }
 
 TEST(AvifInfoGetTest, EnoughBytes) {
@@ -69,17 +157,23 @@ TEST(AvifInfoGetTest, EnoughBytes) {
   input.resize(std::search(input.begin(), input.end(), kMdatTag, kMdatTag + 4) -
                input.begin());
 
-  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
-  EXPECT_TRUE(AreEqual(f, {1u, 1u, 8u, 3u}));
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+  ExpectEqual(f, {.width = 1u,
+                  .height = 1u,
+                  .bit_depth = 8u,
+                  .num_channels = 3u,
+                  .has_gainmap = 0u,
+                  .primary_item_id_location = 96u,
+                  .primary_item_id_bytes = 2u});
 }
 
 TEST(AvifInfoGetTest, Null) {
   const Data input = LoadFile("avifinfo_test_1x1.avif");
   ASSERT_FALSE(input.empty());
 
-  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), nullptr),
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), nullptr),
             kAvifInfoOk);
 }
 
@@ -87,10 +181,10 @@ TEST(AvifInfoGetTest, Null) {
 // Negative tests
 
 TEST(AvifInfoGetTest, Empty) {
-  EXPECT_EQ(AvifInfoIdentify(nullptr, 0), kAvifInfoNotEnoughData);
+  ASSERT_EQ(AvifInfoIdentify(nullptr, 0), kAvifInfoNotEnoughData);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(nullptr, 0, &f), kAvifInfoNotEnoughData);
-  EXPECT_TRUE(AreEqual(f, {0}));
+  ASSERT_EQ(AvifInfoGetFeatures(nullptr, 0, &f), kAvifInfoNotEnoughData);
+  ExpectEqual(f, {0});
 }
 
 TEST(AvifInfoGetTest, NotEnoughBytes) {
@@ -101,9 +195,9 @@ TEST(AvifInfoGetTest, NotEnoughBytes) {
   input.resize(std::search(input.begin(), input.end(), kIpmaTag, kIpmaTag + 4) -
                input.begin());
 
-  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
             kAvifInfoNotEnoughData);
 }
 
@@ -114,11 +208,11 @@ TEST(AvifInfoGetTest, Broken) {
   const uint8_t kIspeTag[] = {'i', 's', 'p', 'e'};
   std::search(input.begin(), input.end(), kIspeTag, kIspeTag + 4)[0] = 'a';
 
-  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
             kAvifInfoInvalidFile);
-  EXPECT_TRUE(AreEqual(f, {0}));
+  ExpectEqual(f, {0});
 }
 
 TEST(AvifInfoGetTest, MetaBoxIsTooBig) {
@@ -132,11 +226,11 @@ TEST(AvifInfoGetTest, MetaBoxIsTooBig) {
   meta_tag[-1] = 1;  // 32-bit "1" then 4-char "meta" then 64-bit size.
   input.insert(meta_tag + 4, {255, 255, 255, 255, 255, 255, 255, 255});
 
-  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
+  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f),
             kAvifInfoTooComplex);
-  EXPECT_TRUE(AreEqual(f, {0}));
+  ExpectEqual(f, {0});
 }
 
 TEST(AvifInfoGetTest, TooManyBoxes) {
@@ -150,22 +244,22 @@ TEST(AvifInfoGetTest, TooManyBoxes) {
     input.insert(input.end(), kBox, kBox + kBox[3]);
   }
 
-  EXPECT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeatures(reinterpret_cast<uint8_t*>(input.data()),
+  ASSERT_EQ(AvifInfoGetFeatures(reinterpret_cast<uint8_t*>(input.data()),
                                 input.size() * 4, &f),
             kAvifInfoTooComplex);
 }
 
 TEST(AvifInfoReadTest, Null) {
-  EXPECT_EQ(AvifInfoIdentifyStream(/*stream=*/nullptr, /*read=*/nullptr,
+  ASSERT_EQ(AvifInfoIdentifyStream(/*stream=*/nullptr, /*read=*/nullptr,
                                    /*skip=*/nullptr),
             kAvifInfoNotEnoughData);
   AvifInfoFeatures f;
-  EXPECT_EQ(AvifInfoGetFeaturesStream(/*stream=*/nullptr, /*read=*/nullptr,
+  ASSERT_EQ(AvifInfoGetFeaturesStream(/*stream=*/nullptr, /*read=*/nullptr,
                                       /*skip=*/nullptr, &f),
             kAvifInfoNotEnoughData);
-  EXPECT_TRUE(AreEqual(f, {0}));
+  ExpectEqual(f, {0});
 }
 
 //------------------------------------------------------------------------------

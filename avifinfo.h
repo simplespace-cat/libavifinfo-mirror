@@ -39,6 +39,14 @@ typedef struct {
   uint32_t bit_depth;      // Likely 8, 10 or 12 bits per channel per pixel.
   uint32_t num_channels;   // Likely 1, 2, 3 or 4 channels:
                            //   (1 monochrome or 3 colors) + (0 or 1 alpha)
+  uint8_t has_gainmap;     // True if a gain map was found.
+  uint8_t gainmap_item_id; // Id of the gain map item.
+  // Start location of the primary item id, in bytes.
+  // The primary item id is a big endian number stored on bytes
+  // primary_item_id_location to primary_item_id_location+primary_item_id_bytes.
+  uint64_t primary_item_id_location;
+  // Number of bytes of the primary item id.
+  uint8_t primary_item_id_bytes;
 } AvifInfoFeatures;
 
 //------------------------------------------------------------------------------
