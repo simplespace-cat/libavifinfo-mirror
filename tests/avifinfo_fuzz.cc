@@ -77,17 +77,34 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
       if (features.width != previous_features.width ||
           features.height != previous_features.height ||
           features.bit_depth != previous_features.bit_depth ||
-          features.num_channels != previous_features.num_channels) {
+          features.num_channels != previous_features.num_channels ||
+          features.has_gainmap != previous_features.has_gainmap ||
+          features.gainmap_item_id != previous_features.gainmap_item_id ||
+          features.primary_item_id_location !=
+              previous_features.primary_item_id_location ||
+          features.primary_item_id_bytes !=
+              previous_features.primary_item_id_bytes) {
         std::abort();
       }
     } else if (status_features == kAvifInfoOk) {
       if (features.width == 0u || features.height == 0u ||
-          features.bit_depth == 0u || features.num_channels == 0u) {
+          features.bit_depth == 0u || features.num_channels == 0u ||
+          !features.has_gainmap != !features.gainmap_item_id ||
+          !features.primary_item_id_location !=
+              !features.primary_item_id_bytes) {
+        std::abort();
+      }
+      if (features.primary_item_id_location &&
+          features.primary_item_id_location + features.primary_item_id_bytes >
+              size) {
         std::abort();
       }
     } else {
       if (features.width != 0u || features.height != 0u ||
-          features.bit_depth != 0u || features.num_channels != 0u) {
+          features.bit_depth != 0u || features.num_channels != 0u ||
+          features.has_gainmap != 0u || features.gainmap_item_id != 0u ||
+          features.primary_item_id_location != 0u ||
+          features.primary_item_id_bytes != 0u) {
         std::abort();
       }
     }

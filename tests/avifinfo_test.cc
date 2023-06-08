@@ -46,7 +46,8 @@ bool SetPrimaryItemIdToGainmapId(Data& input) {
   return true;
 }
 
-void ExpectEqual(const AvifInfoFeatures& actual, const AvifInfoFeatures& expected) {
+void ExpectEqual(const AvifInfoFeatures& actual,
+                 const AvifInfoFeatures& expected) {
   EXPECT_EQ(actual.width, expected.width);
   EXPECT_EQ(actual.height, expected.height);
   EXPECT_EQ(actual.bit_depth, expected.bit_depth);
@@ -90,7 +91,6 @@ TEST(AvifInfoGetTest, WithAlpha) {
                   .has_gainmap = 0u,
                   .primary_item_id_location = 96u,
                   .primary_item_id_bytes = 2u});
-
 }
 
 TEST(AvifInfoGetTest, WithGainmap) {
@@ -127,7 +127,6 @@ TEST(AvifInfoGetTest, WithGainmap) {
                           .primary_item_id_bytes = 2u});
 }
 
-
 TEST(AvifInfoGetTest, NoPixi10b) {
   // Same as above but "meta" box size is stored as 64 bits, "av1C" has
   // 'high_bitdepth' set to true, "pixi" was renamed to "pixy" and "mdat" size
@@ -146,7 +145,6 @@ TEST(AvifInfoGetTest, NoPixi10b) {
                   .has_gainmap = 0u,
                   .primary_item_id_location = 104u,
                   .primary_item_id_bytes = 2u});
-
 }
 
 TEST(AvifInfoGetTest, EnoughBytes) {
