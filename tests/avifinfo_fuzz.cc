@@ -46,6 +46,16 @@ static void StreamSkip(void* stream, size_t num_bytes) {
 
 //------------------------------------------------------------------------------
 
+static bool Equals(const AvifInfoFeatures& lhs, const AvifInfoFeatures& rhs) {
+  return lhs.width == rhs.width && lhs.height == rhs.height &&
+         lhs.bit_depth == rhs.bit_depth &&
+         lhs.num_channels == rhs.num_channels &&
+         lhs.has_gainmap == rhs.has_gainmap &&
+         lhs.gainmap_item_id == rhs.gainmap_item_id &&
+         lhs.primary_item_id_location == rhs.primary_item_id_location &&
+         lhs.primary_item_id_bytes == rhs.primary_item_id_bytes;
+}
+
 // Test a random bitstream of random size, whether it is valid or not.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
   AvifInfoStatus previous_status_identity = kAvifInfoNotEnoughData;
@@ -60,11 +70,32 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
     if (size > 4096) size = std::min(data_size, size + 511);
 
     StreamData stream = {data, size};
+    StreamData stream_features = {data, size};
     AvifInfoFeatures features;
-    const AvifInfoStatus status_identity =
+    AvifInfoFeatures features_stream;
+    const AvifInfoStatus status_identity = AvifInfoIdentify(data, size);
+    const AvifInfoStatus status_identity_stream =
         AvifInfoIdentifyStream(&stream, StreamRead, StreamSkip);
     const AvifInfoStatus status_features =
-        AvifInfoGetFeaturesStream(&stream, StreamRead, StreamSkip, &features);
+        AvifInfoGetFeatures(data, size, &features);
+    const AvifInfoStatus status_features_stream = AvifInfoGetFeaturesStream(
+        &stream_features, StreamRead, StreamSkip, &features_stream);
+
+    if (status_identity_stream != status_identity ||
+        status_features_stream != status_features ||
+        !Equals(features_stream, features)) {
+      std::abort();
+    }
+
+    const uint64_t primary_item_id_location_offset = size - stream.data_size;
+    const AvifInfoStatus status_features_stream2 = AvifInfoGetFeaturesStream(
+        &stream, StreamRead, StreamSkip, &features_stream);
+    features_stream.primary_item_id_location += primary_item_id_location_offset;
+    if (status_features_stream2 != status_features ||
+        (status_features_stream2 == kAvifInfoOk &&
+         !Equals(features_stream, features))) {
+      std::abort();
+    }
 
     if ((previous_status_identity != kAvifInfoNotEnoughData &&
          status_identity != previous_status_identity) ||
@@ -74,16 +105,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
     }
 
     if (status_features == previous_status_features) {
-      if (features.width != previous_features.width ||
-          features.height != previous_features.height ||
-          features.bit_depth != previous_features.bit_depth ||
-          features.num_channels != previous_features.num_channels ||
-          features.has_gainmap != previous_features.has_gainmap ||
-          features.gainmap_item_id != previous_features.gainmap_item_id ||
-          features.primary_item_id_location !=
-              previous_features.primary_item_id_location ||
-          features.primary_item_id_bytes !=
-              previous_features.primary_item_id_bytes) {
+      if (!Equals(features, previous_features)) {
         std::abort();
       }
     } else if (status_features == kAvifInfoOk) {
