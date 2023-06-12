@@ -41,9 +41,9 @@ typedef struct {
                             //   (1 monochrome or 3 colors) + (0 or 1 alpha)
   uint8_t has_gainmap;      // True if a gain map was found.
   uint8_t gainmap_item_id;  // Id of the gain map item.
-  // Start location of the primary item id, in bytes.
-  // The primary item id is a big endian number stored on bytes
-  // primary_item_id_location to
+  // Start location in bytes of the primary item id, relative to the beginning
+  // of the given payload. The primary item id is a big endian number stored on
+  // bytes primary_item_id_location to
   // primary_item_id_location+primary_item_id_bytes-1 inclusive.
   uint64_t primary_item_id_location;
   // Number of bytes of the primary item id.
@@ -88,6 +88,10 @@ typedef void (*skip_stream_t)(void* stream, size_t num_bytes);
 AvifInfoStatus AvifInfoIdentifyStream(void* stream, read_stream_t read,
                                       skip_stream_t skip);
 // Can be called right after AvifInfoIdentifyStream() with the same 'stream'.
+// Any location-dependent feature such as 'primary_item_id_location' is relative
+// to the given 'stream', and must be offset by the number of bytes read or
+// skipped during AvifInfoIdentifyStream() if it was called prior to
+// AvifInfoGetFeaturesStream().
 AvifInfoStatus AvifInfoGetFeaturesStream(void* stream, read_stream_t read,
                                          skip_stream_t skip,
                                          AvifInfoFeatures* features);
