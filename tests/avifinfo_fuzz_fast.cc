@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include "third_party/libavifinfo/avifinfo.h"
+#include "avifinfo.h"
 
 //------------------------------------------------------------------------------
 
