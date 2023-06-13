@@ -62,6 +62,8 @@ AvifInfoStatus AvifInfoIdentify(const uint8_t* data, size_t data_size);
 // 'data' can be partial but must point to the beginning of the AVIF file.
 // The 'features' can be parsed in the first 450 bytes of most AVIF files.
 // 'features' are set to 0 unless kAvifInfoOk is returned.
+// AvifInfoGetFeatures() should only be called if AvifInfoIdentify() returned
+// kAvifInfoOk with the same input bytes.
 AvifInfoStatus AvifInfoGetFeatures(const uint8_t* data, size_t data_size,
                                    AvifInfoFeatures* features);
 
@@ -87,11 +89,15 @@ typedef void (*skip_stream_t)(void* stream, size_t num_bytes);
 // 'read' cannot be null. If 'skip' is null, 'read' is called instead.
 AvifInfoStatus AvifInfoIdentifyStream(void* stream, read_stream_t read,
                                       skip_stream_t skip);
-// Can be called right after AvifInfoIdentifyStream() with the same 'stream'.
+
+// Can be called right after AvifInfoIdentifyStream() with the same 'stream'
+// object if AvifInfoIdentifyStream() returned kAvifInfoOk.
 // Any location-dependent feature such as 'primary_item_id_location' is relative
 // to the given 'stream', and must be offset by the number of bytes read or
 // skipped during AvifInfoIdentifyStream() if it was called prior to
-// AvifInfoGetFeaturesStream().
+// AvifInfoGetFeaturesStream() on the same 'stream' object.
+// AvifInfoGetFeaturesStream() should only be called if AvifInfoIdentifyStream()
+// returned kAvifInfoOk with the same input bytes.
 AvifInfoStatus AvifInfoGetFeaturesStream(void* stream, read_stream_t read,
                                          skip_stream_t skip,
                                          AvifInfoFeatures* features);

@@ -87,14 +87,20 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
       std::abort();
     }
 
+    // AvifInfoGetFeaturesStream() should only be called on the stream already
+    // given to AvifInfoIdentifyStream() if AvifInfoIdentifyStream() was a
+    // success. Call it anyway to make sure it does not crash, but only check
+    // the returned status and features when it makes sense.
     const uint64_t primary_item_id_location_offset = size - stream.data_size;
     const AvifInfoStatus status_features_stream2 = AvifInfoGetFeaturesStream(
         &stream, StreamRead, StreamSkip, &features_stream);
-    features_stream.primary_item_id_location += primary_item_id_location_offset;
-    if (status_features_stream2 != status_features ||
-        (status_features_stream2 == kAvifInfoOk &&
-         !Equals(features_stream, features))) {
-      std::abort();
+    if (status_features_stream2 == kAvifInfoOk) {
+      features_stream.primary_item_id_location +=
+          primary_item_id_location_offset;
+      if (status_features_stream2 != status_features ||
+          !Equals(features_stream, features)) {
+        std::abort();
+      }
     }
 
     if ((previous_status_identity != kAvifInfoNotEnoughData &&
