@@ -47,6 +47,7 @@ if(AVIFINFO_BUILD_TOOLS)
   ExternalProject_Add(
     libavif
     GIT_REPOSITORY https://github.com/AOMediaCodec/libavif
+    GIT_TAG main
     PATCH_COMMAND cd ${CMAKE_BINARY_DIR}/libavif-prefix/src/libavif/ext &&
                   ./aom.cmd
     UPDATE_DISCONNECTED 1 # Avoid building aom everytime.
