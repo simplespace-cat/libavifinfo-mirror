@@ -55,15 +55,19 @@ typedef struct {
 // Use this API if a raw byte array of fixed size is available as input.
 
 // Parses the 'data' and returns kAvifInfoOk if it is identified as an AVIF.
+// 'data' can be partial but must point to the beginning of the AVIF file.
 // The file type can be identified in the first 12 bytes of most AVIF files.
 AvifInfoStatus AvifInfoIdentify(const uint8_t* data, size_t data_size);
 
-// Parses the identified AVIF 'data' and extracts its 'features'.
+// Parses the 'data' and returns kAvifInfoOk and its 'features' if it is
+// identified as an AVIF file.
 // 'data' can be partial but must point to the beginning of the AVIF file.
 // The 'features' can be parsed in the first 450 bytes of most AVIF files.
 // 'features' are set to 0 unless kAvifInfoOk is returned.
-// AvifInfoGetFeatures() should only be called if AvifInfoIdentify() returned
-// kAvifInfoOk with the same input bytes.
+// There is no need to call AvifInfoIdentify() before AvifInfoGetFeatures().
+// AvifInfoGetFeatures() parses the file further than AvifInfoIdentify() so it
+// is possible that AvifInfoGetFeatures() returns errors while
+// AvifInfoIdentify() returns kAvifInfoOk on the same given input bytes.
 AvifInfoStatus AvifInfoGetFeatures(const uint8_t* data, size_t data_size,
                                    AvifInfoFeatures* features);
 

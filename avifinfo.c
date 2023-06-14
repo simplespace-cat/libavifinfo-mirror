@@ -768,6 +768,11 @@ AvifInfoStatus AvifInfoIdentify(const uint8_t* data, size_t data_size) {
 
 AvifInfoStatus AvifInfoGetFeatures(const uint8_t* data, size_t data_size,
                                    AvifInfoFeatures* features) {
+  const AvifInfoStatus status = AvifInfoIdentify(data, data_size);
+  if (status != kAvifInfoOk) {
+    if (features != NULL) memset(features, 0, sizeof(*features));
+    return status;
+  }
   AvifInfoInternalForward stream;
   stream.data = data;
   stream.data_size = data_size;

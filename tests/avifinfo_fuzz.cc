@@ -92,6 +92,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
         std::abort();
       }
     } else if (status_features == kAvifInfoOk) {
+      if (status_identity != kAvifInfoOk) {
+        std::abort();
+      }
       if (features.width == 0u || features.height == 0u ||
           features.bit_depth == 0u || features.num_channels == 0u ||
           !features.has_gainmap != !features.gainmap_item_id ||
@@ -123,9 +126,16 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
     const AvifInfoStatus status_features_stream = AvifInfoGetFeaturesStream(
         &stream_features, StreamRead, StreamSkip, &features_stream);
     // Both API should have exactly the same behavior, errors included.
-    if (status_identity_stream != status_identity ||
-        status_features_stream != status_features ||
-        !Equals(features_stream, features)) {
+    if (status_identity_stream != status_identity) {
+      std::abort();
+    }
+    // AvifInfoGetFeaturesStream() should only be called if
+    // AvifInfoIdentifyStream() was a success. Call it anyway to make sure it
+    // does not crash, but only check the returned status and features when it
+    // makes sense.
+    if (status_identity_stream == kAvifInfoOk &&
+        (status_features_stream != status_features ||
+         !Equals(features_stream, features))) {
       std::abort();
     }
 
@@ -136,18 +146,20 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
     const AvifInfoStatus status_features_reused_stream =
         AvifInfoGetFeaturesStream(&stream_reused, StreamRead, StreamSkip,
                                   &features_stream_reused);
-    // AvifInfoGetFeaturesStream() should only be called on the stream already
-    // given to AvifInfoIdentifyStream() if AvifInfoIdentifyStream() was a
-    // success. Call it anyway to make sure it does not crash, but only check
-    // the returned status and features when it makes sense.
-    if (status_features_reused_stream == kAvifInfoOk) {
-      if (status_features != kAvifInfoOk) {
+    // AvifInfoGetFeaturesStream() should only be called if
+    // AvifInfoIdentifyStream() was a success. Call it anyway to make sure it
+    // does not crash, but only check the returned status and features when it
+    // makes sense.
+    if (status_identity_stream == kAvifInfoOk) {
+      if (status_features_reused_stream != status_features_stream) {
         std::abort();
       }
-      // Offset any location-dependent feature as described in avifinfo.h.
-      features_stream_reused.primary_item_id_location +=
-          size - stream_identity.data_size;
-      if (!Equals(features_stream_reused, features)) {
+      if (status_features_reused_stream == kAvifInfoOk) {
+        // Offset any location-dependent feature as described in avifinfo.h.
+        features_stream_reused.primary_item_id_location +=
+            size - stream_identity.data_size;
+      }
+      if (!Equals(features_stream_reused, features_stream)) {
         std::abort();
       }
     }
