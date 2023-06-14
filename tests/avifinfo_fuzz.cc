@@ -66,8 +66,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
   // for a given size and a status that is not kAvifInfoNotEnoughData, any
   // bigger size (of the same data) should return the same status and features.
   for (size_t size = 0; size < data_size; ++size) {
-    // Speed up considerably once it is highly likely the header is parsed.
-    if (size > 4096) size = std::min(data_size, size + 511);
+    if (size > 1024 || previous_status_features != kAvifInfoNotEnoughData) {
+      // The behavior is unlikely to change: save computing resources.
+      size = std::min(data_size, size * 2);
+    }
 
     // Simple raw pointer API.
     AvifInfoFeatures features;
