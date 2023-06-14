@@ -164,6 +164,35 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
       }
     }
 
+    // Another way of calling the stream API: no provided user-defined skip
+    // method.
+    AvifInfoFeatures features_no_skip;
+    StreamData stream_identity_no_skip = {data, size};
+    StreamData stream_features_no_skip = {data, size};
+    const AvifInfoStatus status_identity_no_skip = AvifInfoIdentifyStream(
+        &stream_identity_no_skip, StreamRead, /*skip=*/nullptr);
+    const AvifInfoStatus status_features_no_skip =
+        AvifInfoGetFeaturesStream(&stream_features_no_skip, StreamRead,
+                                  /*skip=*/nullptr, &features_no_skip);
+    // There may be some difference in status. For example, a valid or invalid
+    // status could be returned just after skipping some bytes. If the skip
+    // argument is omitted, these bytes will be read instead. If some of these
+    // bytes are missing, kAvifInfoNotEnoughData will be returned instead of the
+    // expected success or failure status.
+    if (status_identity_no_skip != status_identity_stream &&
+        !(status_identity_no_skip == kAvifInfoNotEnoughData &&
+          status_identity_stream == kAvifInfoOk)) {
+      std::abort();
+    }
+    if (status_identity_stream == kAvifInfoOk) {
+      if ((status_features_no_skip != status_features &&
+           !(status_features_no_skip == kAvifInfoNotEnoughData &&
+             status_features == kAvifInfoInvalidFile)) ||
+          !Equals(features_no_skip, features)) {
+        std::abort();
+      }
+    }
+
     previous_status_identity = status_identity;
     previous_status_features = status_features;
     previous_features = features;
