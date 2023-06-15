@@ -34,6 +34,13 @@ if(AVIFINFO_BUILD_TESTS)
     NAME avifinfo_test
     COMMAND ${CMAKE_CURRENT_BINARY_DIR}/avifinfo_test
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+  add_executable(avifinfo_demo tests/avifinfo_demo.c)
+  target_link_libraries(avifinfo_demo PRIVATE avifinfo)
+  add_test(
+    NAME avifinfo_demo
+    COMMAND ${CMAKE_CURRENT_BINARY_DIR}/avifinfo_demo avifinfo_test_1x1.avif
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 endif()
 
 # C++ tools
