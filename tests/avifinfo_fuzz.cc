@@ -187,7 +187,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
     if (status_identity_stream == kAvifInfoOk) {
       if ((status_features_no_skip != status_features &&
            !(status_features_no_skip == kAvifInfoNotEnoughData &&
-             status_features == kAvifInfoInvalidFile)) ||
+             status_features != kAvifInfoOk)) ||
           !Equals(features_no_skip, features)) {
         std::abort();
       }
