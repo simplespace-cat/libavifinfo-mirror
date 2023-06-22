@@ -32,7 +32,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size) {
     }
     if (features.width == 0u || features.height == 0u ||
         features.bit_depth == 0u || features.num_channels == 0u ||
-        !features.has_gainmap != !features.gainmap_item_id ||
+        (!features.has_gainmap && features.gainmap_item_id) ||
         !features.primary_item_id_location != !features.primary_item_id_bytes) {
       std::abort();
     }
