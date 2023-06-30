@@ -316,9 +316,17 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
   if (has_fullbox_header) box_header_size += 4;
   AVIFINFO_CHECK(box->size >= box_header_size, kInvalid);
   box->content_size = box->size - box_header_size;
-  // Avoid timeouts. The maximum number of parsed boxes is arbitrary.
-  ++*num_parsed_boxes;
-  AVIFINFO_CHECK(*num_parsed_boxes < AVIFINFO_MAX_NUM_BOXES, kAborted);
+  // AvifInfoGetFeaturesStream() can be called on a full stream or on a stream
+  // where the 'ftyp' box was already read. Do not count 'ftyp' boxes towards
+  // AVIFINFO_MAX_NUM_BOXES, so that this function returns the same status in
+  // both situations (because of the AVIFINFO_MAX_NUM_BOXES check that would
+  // compare a different box count otherwise). This is fine because top-level
+  // 'ftyp' boxes are just skipped anyway.
+  if (nesting_level != 0 || memcmp(box->type, "ftyp", 4)) {
+    // Avoid timeouts. The maximum number of parsed boxes is arbitrary.
+    ++*num_parsed_boxes;
+    AVIFINFO_CHECK(*num_parsed_boxes < AVIFINFO_MAX_NUM_BOXES, kAborted);
+  }
 
   box->version = 0;
   box->flags = 0;
@@ -718,14 +726,6 @@ static AvifInfoInternalStatus ParseFile(AvifInfoInternalStream* stream,
     AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(
         /*nesting_level=*/0, stream, AVIFINFO_MAX_SIZE, num_parsed_boxes,
         &box));
-    if (*num_parsed_boxes == 1 && memcmp(box.type, "ftyp", 4)) {
-      // AvifInfoGetFeaturesStream() can be called on a full stream or on a
-      // stream where the 'ftyp' box was already read. If it is not the first
-      // parsed box here, consider it was, so that this function returns the
-      // same status in both situations (because of the AVIFINFO_MAX_NUM_BOXES
-      // check that would compare a different box count otherwise).
-      ++*num_parsed_boxes;
-    }
     if (!memcmp(box.type, "meta", 4)) {
       return ParseMeta(/*nesting_level=*/1, stream, box.content_size,
                        num_parsed_boxes, features);
