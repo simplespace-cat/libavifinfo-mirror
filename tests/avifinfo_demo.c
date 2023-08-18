@@ -35,7 +35,7 @@ static int Identify(const char* file_path) {
 static int IdentifyAndGetFeatures(const char* file_path) {
   FILE* file = fopen(file_path, "rb");
   if (!file) return 0;
-  uint8_t data[512];  // Features are probably available within 512 bytes.
+  uint8_t data[1024];  // Features are probably available within 1024 bytes.
   const size_t data_size = fread(data, 1, sizeof(data), file);
   fclose(file);
   AvifInfoFeatures features;
@@ -138,10 +138,20 @@ static int IdentifyAndGetFeaturesStreams(const char* file_path) {
 //------------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
-  if (argc >= 2 && Identify(argv[1]) && IdentifyAndGetFeatures(argv[1]) &&
-      IdentifyStream(argv[1]) && IdentifyAndGetFeaturesStream(argv[1]) &&
-      IdentifyAndGetFeaturesStreams(argv[1])) {
-    return 0;
+  if (argc < 2) {
+    fprintf(stderr, "Usage: avifinfo_demo [file]...\n");
+    return 1;
   }
-  return 1;
+  int res = 0;
+  for (int i = 1; i < argc; ++i) {
+    if (Identify(argv[i]) && IdentifyAndGetFeatures(argv[i]) &&
+        IdentifyStream(argv[i]) && IdentifyAndGetFeaturesStream(argv[i]) &&
+        IdentifyAndGetFeaturesStreams(argv[i])) {
+      printf("%s is valid\n", argv[i]);
+    } else {
+      fprintf(stderr, "ERROR: %s is NOT a valid AVIF file\n", argv[1]);
+      res = 1;
+    }
+  }
+  return res;
 }
