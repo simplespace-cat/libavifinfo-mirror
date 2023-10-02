@@ -175,6 +175,7 @@ typedef struct {
   uint8_t data_was_skipped;  // True if some loops/indices were skipped.
   uint8_t tone_mapped_item_id;  // Id of the "tmap" box, > 0 if present.
   uint8_t iinf_parsed;  // True if the "iinf" (item info) box was parsed.
+  uint8_t iref_parsed;  // True if the "iref" (item reference) box was parsed.
 
   uint8_t num_tiles;
   AvifInfoInternalTile tiles[AVIFINFO_MAX_TILES];
@@ -267,7 +268,8 @@ static AvifInfoInternalStatus AvifInfoInternalGetPrimaryItemFeatures(
   }
   // If the gain map has not been found but we haven't read all the relevant
   // metadata, we might still find one later and cannot stop now.
-  if (!f->primary_item_features.has_gainmap && !f->iinf_parsed) {
+  if (!f->primary_item_features.has_gainmap &&
+      (!f->iinf_parsed || (f->tone_mapped_item_id && !f->iref_parsed))) {
     return kNotFound;
   }
 
@@ -605,6 +607,8 @@ static AvifInfoInternalStatus ParseIref(int nesting_level,
                                         uint32_t num_remaining_bytes,
                                         uint32_t* num_parsed_boxes,
                                         AvifInfoInternalFeatures* features) {
+  features->iref_parsed = 1;
+
   do {
     AvifInfoInternalBox box;
     AVIFINFO_CHECK_FOUND(AvifInfoInternalParseBox(

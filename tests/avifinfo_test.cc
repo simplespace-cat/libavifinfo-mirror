@@ -128,37 +128,43 @@ TEST(AvifInfoGetTest, WithGainmap) {
 }
 
 TEST(AvifInfoGetTest, WithGainmapTmap) {
-  const Data input = LoadFile("avifinfo_test_12x34_gainmap_tmap.avif");
-  ASSERT_FALSE(input.empty());
+  for (const char* file_name :
+       {"avifinfo_test_12x34_gainmap_tmap.avif",
+        "avifinfo_test_12x34_gainmap_tmap_iref_after_iprp.avif"}) {
+    SCOPED_TRACE(file_name);
+    const Data input = LoadFile(file_name);
+    ASSERT_FALSE(input.empty());
 
-  ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
-  AvifInfoFeatures f;
-  ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
-  ExpectEqual(f, {.width = 12u,
-                  .height = 34u,
-                  .bit_depth = 10u,
-                  .num_channels = 4u,
-                  .has_gainmap = 1u,
-                  .gainmap_item_id = 4u,
-                  .primary_item_id_location = 96u,
-                  .primary_item_id_bytes = 2u});
+    ASSERT_EQ(AvifInfoIdentify(input.data(), input.size()), kAvifInfoOk);
+    AvifInfoFeatures f;
+    ASSERT_EQ(AvifInfoGetFeatures(input.data(), input.size(), &f), kAvifInfoOk);
+    ExpectEqual(f, {.width = 12u,
+                    .height = 34u,
+                    .bit_depth = 10u,
+                    .num_channels = 4u,
+                    .has_gainmap = 1u,
+                    .gainmap_item_id = 4u,
+                    .primary_item_id_location = 96u,
+                    .primary_item_id_bytes = 2u});
 
-  Data gainmap = input;
-  ASSERT_TRUE(SetPrimaryItemIdToGainmapId(gainmap));
-  ASSERT_EQ(AvifInfoIdentify(gainmap.data(), gainmap.size()), kAvifInfoOk);
-  AvifInfoFeatures gainmap_f;
-  ASSERT_EQ(AvifInfoGetFeatures(gainmap.data(), gainmap.size(), &gainmap_f),
-            kAvifInfoOk);
-  // Note that num_channels says 4 even though the alpha plane is associated to
-  // the main image and not the gain map, but libavifinfo does not check this.
-  ExpectEqual(gainmap_f, {.width = 6u,
-                          .height = 17u,
-                          .bit_depth = 8u,
-                          .num_channels = 4u,
-                          .has_gainmap = 1u,
-                          .gainmap_item_id = 4u,
-                          .primary_item_id_location = 96u,
-                          .primary_item_id_bytes = 2u});
+    Data gainmap = input;
+    ASSERT_TRUE(SetPrimaryItemIdToGainmapId(gainmap));
+    ASSERT_EQ(AvifInfoIdentify(gainmap.data(), gainmap.size()), kAvifInfoOk);
+    AvifInfoFeatures gainmap_f;
+    ASSERT_EQ(AvifInfoGetFeatures(gainmap.data(), gainmap.size(), &gainmap_f),
+              kAvifInfoOk);
+    // Note that num_channels says 4 even though the alpha plane is associated
+    // to the main image and not the gain map, but libavifinfo does not check
+    // this.
+    ExpectEqual(gainmap_f, {.width = 6u,
+                            .height = 17u,
+                            .bit_depth = 8u,
+                            .num_channels = 4u,
+                            .has_gainmap = 1u,
+                            .gainmap_item_id = 4u,
+                            .primary_item_id_location = 96u,
+                            .primary_item_id_bytes = 2u});
+  }
 }
 
 TEST(AvifInfoGetTest, NoPixi10b) {
