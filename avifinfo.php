@@ -444,7 +444,7 @@ class Parser {
       } else if ( $box->type == 'auxC' ) {
         // See AV1 Image File Format (AVIF) 4
         // at https://aomediacodec.github.io/av1-avif/#auxiliary-images
-        $kAlphaStr       = "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha";
+        $kAlphaStr       = "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha\0";
         $kAlphaStrLength = 44; // Includes terminating character.
         if ( $box->content_size >= $kAlphaStrLength ) {
           if ( !( $data = read( $this->handle, $kAlphaStrLength ) ) ) {
