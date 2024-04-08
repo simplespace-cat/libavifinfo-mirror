@@ -43,3 +43,4 @@ test_avifinfo_parser('avifinfo_test_1x1.avif', 1, 1, 8, 3);
 test_avifinfo_parser('avifinfo_test_2x2_alpha.avif', 2, 2, 8, 4);
 test_avifinfo_parser('avifinfo_test_1x1_10b_nopixi_metasize64b_mdatsize0.avif',
                      1, 1, 10, 3);
+test_avifinfo_parser('avifinfo_test_199x200_alpha_grid2x1.avif', 199, 200, 8, 4);
