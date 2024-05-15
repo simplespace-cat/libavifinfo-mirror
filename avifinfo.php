@@ -250,6 +250,10 @@ class Box {
       // Read the 32 least-significant bits.
       $this->size = read_big_endian( substr( $data, 4, 4 ), 4 );
     } else if ( $this->size == 0 ) {
+      // ISO/IEC 14496-12 4.2.2:
+      //   if size is 0, then this box shall be in a top-level box
+      //   (i.e. not contained in another box)
+      // Unfortunately the presence of a parent box is unknown here.
       $this->size = $num_remaining_bytes;
     }
     if ( $this->size < $header_size ) {
@@ -258,6 +262,9 @@ class Box {
     if ( $this->size > $num_remaining_bytes ) {
       return INVALID;
     }
+
+    // 16 bytes of usertype should be read here if the box type is 'uuid'.
+    // 'uuid' boxes are skipped so usertype is part of the skipped body.
 
     $has_fullbox_header = $this->type == 'meta' || $this->type == 'pitm' ||
                           $this->type == 'ipma' || $this->type == 'ispe' ||
@@ -477,7 +484,7 @@ class Parser {
   /**
    * Parses an "iprp" box.
    *
-   * The "ipco" box contain the properties which are linked to items by the "ipma" box.
+   * The "ipco" box contains the properties which are linked to items by the "ipma" box.
    *
    * @param stream  $handle              The resource the box will be parsed from.
    * @param int     $num_remaining_bytes The number of bytes that should be available from the resource.
