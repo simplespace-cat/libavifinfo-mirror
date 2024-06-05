@@ -63,6 +63,22 @@ cd tests && \
 php avifinfo_test.php
 ```
 
+## Rust implementation
+
+The Rust implementation of libavifinfo is similar to the C API.
+
+```shell
+cargo build
+```
+
+See `tests/avifinfo_test.rs` for a usage example.
+
+### Rust test
+
+```shell
+cargo test
+```
+
 ## Development
 
 ### Submitting patches {#submitting-patches}

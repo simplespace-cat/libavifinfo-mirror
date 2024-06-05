@@ -1,0 +1,14 @@
+[package]
+name = "avifinfo"
+description = "Basic AVIF features parsing library"
+version = "1.0.0"
+authors = ["Yannis Guyon <yguyon@google.com>"]
+repository = "https://aomedia.googlesource.com/libavifinfo"
+keywords = ["avif"]
+license = "Alliance for Open Media Patent License 1.0"
+include = ["avifinfo.rs", "Cargo.toml", "README.md"]
+edition = "2021"
+
+[lib]
+name = "avifinfo"
+path = "avifinfo.rs"
