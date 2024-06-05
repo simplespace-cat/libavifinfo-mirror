@@ -103,7 +103,7 @@ class Features {
   public $primary_item_id;
   public $primary_item_features = array( // Deduced from the data below.
     'width'        => UNDEFINED, // In number of pixels.
-    'height'       => UNDEFINED, // Ignores mirror and rotation.
+    'height'       => UNDEFINED, // Ignores crop and rotation.
     'bit_depth'    => UNDEFINED, // Likely 8, 10 or 12 bits per channel per pixel.
     'num_channels' => UNDEFINED  // Likely 1, 2, 3 or 4 channels:
                                           //   (1 monochrome or 3 colors) + (0 or 1 alpha)
@@ -303,7 +303,7 @@ class Box {
                      ( $this->type == 'auxC' && $this->version <= 0 );
       // Instead of considering this file as invalid, skip unparsable boxes.
       if ( !$is_parsable ) {
-        $this->type = 'unknownversion';
+        $this->type = 'skip'; // FreeSpaceBox. To be ignored by readers.
       }
     }
     // print_r( $this ); // Uncomment to print all boxes.

@@ -372,7 +372,7 @@ static AvifInfoInternalStatus AvifInfoInternalParseBox(
         (!memcmp(box->type, "infe", 4) && box->version >= 2 &&
          box->version <= 3);
     // Instead of considering this file as invalid, skip unparsable boxes.
-    if (!is_parsable) memcpy(box->type, "\0skp", 4);  // \0 so not a valid type
+    if (!is_parsable) memcpy(box->type, "skip", 4);  // FreeSpaceBox
   }
   AVIF_DEBUG_LOG("%*c", nesting_level * 2, ' ');
   AVIF_DEBUG_LOG("Box type %.4s size %d\n", box->type, box->size);

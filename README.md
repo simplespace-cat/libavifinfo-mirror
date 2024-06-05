@@ -54,7 +54,7 @@ The PHP implementation of libavifinfo is a subset of the C API.
 not available in the PHP release version you use, you can fallback to
 `avifinfo.php` instead.
 
-See `avifinfo_test.php` for a usage example.
+See `tests/avifinfo_test.php` for a usage example.
 
 ### PHP test
 

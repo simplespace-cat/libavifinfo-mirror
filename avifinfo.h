@@ -35,7 +35,7 @@ typedef enum {
 } AvifInfoStatus;
 
 typedef struct {
-  uint32_t width, height;   // In number of pixels. Ignores mirror and rotation.
+  uint32_t width, height;   // In number of pixels. Ignores crop and rotation.
   uint32_t bit_depth;       // Likely 8, 10 or 12 bits per channel per pixel.
   uint32_t num_channels;    // Likely 1, 2, 3 or 4 channels:
                             //   (1 monochrome or 3 colors) + (0 or 1 alpha)
