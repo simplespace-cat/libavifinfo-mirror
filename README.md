@@ -99,7 +99,8 @@ If you would like to contribute to **libavifinfo**, please follow the steps for
 ## Known users of libavifinfo
 
 - [Chromium](https://source.chromium.org/chromium/chromium/src/+/main:third_party/libavifinfo)
-  uses the C impl to extract the gain map item for HDR tone mapping.
+  uses the C impl to extract the gain map item for HDR tone mapping (removed in
+  [Oct 2024](https://chromium.googlesource.com/chromium/src.git/+/fb254cbc7fd97f14fb869b79aca597e62f6125a6)).
 - [PHP-src](https://github.com/php/php-src/tree/master/ext/standard/libavifinfo)
   uses the C impl to parse image features without relying on libavif or libheif.
 - [WordPress](https://github.com/WordPress/wordpress-develop/blob/trunk/src/wp-includes/class-avif-info.php)
