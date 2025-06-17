@@ -14,16 +14,16 @@ jobs:
       - name: clone self
         run: |
           git clone --depth 1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git repo
-          cd repo
 
       - name: fetch upstream
+        working-directory: repo
         run: |
           git remote add upstream https://aomedia.googlesource.com/libavifinfo
           git fetch --prune upstream "+refs/heads/*:refs/remotes/upstream/*" --tags
 
       - name: push branches and tags
+        working-directory: repo
         run: |
-          
           for b in $(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream); do
             git push --force-with-lease origin "refs/remotes/upstream/${b}:refs/heads/${b}"
           done
