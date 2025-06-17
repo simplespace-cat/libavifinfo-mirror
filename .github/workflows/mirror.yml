@@ -25,6 +25,9 @@ jobs:
         working-directory: repo
         run: |
           for b in $(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream); do
+            if [ "$b" = "HEAD" ]; then
+              continue
+            fi
             git push --force-with-lease origin "refs/remotes/upstream/${b}:refs/heads/${b}"
           done
           git push --force origin --tags
