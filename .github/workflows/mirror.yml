@@ -1,4 +1,7 @@
-name: 'mirror'
+name: mirror
+
+permissions:
+  contents: write
 
 on:
   push:
@@ -6,15 +9,14 @@ on:
       - __mirror
   schedule:
     - cron: '0 3 1 1,3,5,7,9,11 *'
-  workflow_dispatch:  
+  workflow_dispatch:
 
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    name: mirror-sync
     steps:
       - name: mirror-repository
         run: |
-          git clone --bare https://aomedia.googlesource.com/libavifinfo
+          git clone --bare https://aomedia.googlesource.com/libavifinfo libavifinfo.git
           cd libavifinfo.git
           git push --mirror https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
